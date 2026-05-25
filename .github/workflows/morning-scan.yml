@@ -1,22 +1,24 @@
-name: ☁️ 早盘扫描（云端兜底）
+name: ☁️ 早盘引擎（云端兜底）
 
 on:
   schedule:
-    # 北京时间 09:35 / 10:00 / 10:15 / 14:30
-    # GitHub Actions 用 UTC，所以减 8 小时
-    - cron: "35 1 * * 1-5"   # 09:35 龙回头观察池
-    - cron: "0  2 * * 1-5"   # 10:00 Alpha Lab 整点
-    - cron: "15 2 * * 1-5"   # 10:15 执行指令
-    - cron: "30 6 * * 1-5"   # 14:30 尾盘扫描
+    # 北京时间 (UTC+8) → UTC
+    - cron: "0  1 * * 1-5"   # 09:00 隔夜早报
+    - cron: "30 1 * * 1-5"   # 09:30 持仓风控
+    - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
+    - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
+    - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
+    - cron: "30 6 * * 1-5"   # 14:30 龙回头尾盘
   
   workflow_dispatch:  # 手动触发
 
 jobs:
-  scan:
+  engine:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      PYTHONPATH: ${{ github.workspace }}
     
     steps:
       - name: 检出代码
@@ -29,12 +31,58 @@ jobs:
       
       - name: 安装依赖
         run: |
-          pip install akshare dashscope requests
+          pip install akshare requests
       
-      - name: 运行扫描
+      - name: 识别时点
+        id: slot
+        run: |
+          HOUR=$(TZ='Asia/Shanghai' date +%H)
+          MIN=$(TZ='Asia/Shanghai' date +%M)
+          SLOT="${HOUR}:${MIN}"
+          echo "slot=$SLOT" >> $GITHUB_OUTPUT
+          echo "当前北京时间: $SLOT"
+      
+      - name: 🕘 09:00 隔夜早报
+        if: steps.slot.outputs.slot == '09:00'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: python morning_scan.py
+        run: python trading_engine/engine_runner.py 09:00
+      
+      - name: 🛡️ 09:30 持仓风控
+        if: steps.slot.outputs.slot == '09:30'
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python trading_engine/engine_runner.py 09:30
+      
+      - name: 📸 09:35 龙回头快照
+        if: steps.slot.outputs.slot == '09:35'
+        run: python trading_engine/engine_runner.py 09:35
+      
+      - name: 🔄 10:00 通用反转
+        if: steps.slot.outputs.slot == '10:00'
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python trading_engine/engine_runner.py 10:00
+      
+      - name: 🐉 10:15 龙回头执行
+        if: steps.slot.outputs.slot == '10:15'
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python trading_engine/engine_runner.py 10:15
+      
+      - name: 🌆 14:30 龙回头尾盘
+        if: steps.slot.outputs.slot == '14:30'
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python trading_engine/engine_runner.py 14:30
