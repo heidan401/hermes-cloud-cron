@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>天才交易员 · 监控面板</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117; color: #c9d1d9;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    }
+    .placeholder {
+      text-align: center; padding: 2rem;
+    }
+    .placeholder h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #58a6ff; }
+    .placeholder p { color: #8b949e; font-size: 1rem; }
+    .status { margin-top: 2rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 1.5rem; min-width: 180px;
+    }
+    .card .title { font-size: 0.85rem; color: #8b949e; margin-bottom: 0.5rem; }
+    .card .val { font-size: 1.5rem; font-weight: bold; }
+    .card .val.ok { color: #3fb950; }
+    .card .val.wait { color: #d29922; }
+  </style>
+</head>
+<body>
+  <div class="placeholder">
+    <h1>🐉 天才交易员 · 监控面板</h1>
+    <p>Dashboard 正在建设中，设计图到了就开工</p>
+    <div class="status">
+      <div class="card"><div class="title">仓库</div><div class="val ok">✅ 已上线</div></div>
+      <div class="card"><div class="title">Pages</div><div class="val ok">✅ 已启用</div></div>
+      <div class="card"><div class="title">Dashboard</div><div class="val wait">⏳ 待设计</div></div>
+      <div class="card"><div class="title">云端 Cron</div><div class="val wait">⏳ 待配密钥</div></div>
+    </div>
+  </div>
+</body>
+</html>

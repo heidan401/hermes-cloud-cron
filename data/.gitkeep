@@ -1,0 +1,8 @@
+# 数据目录 — cron 任务产出 JSON 放这里
+# 结构：
+#   dragon_reversal/latest.json    — 龙回头最新
+#   general_reversal/latest.json   — 通用反转最新
+#   policy_hot/latest.json         — 政策热门股最新
+#   holdings/latest.json           — 持仓快照
+#   daily_reflection/latest.json   — 每日复盘
+#   各自有 history/ 子目录放历史
