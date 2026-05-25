@@ -111,28 +111,30 @@ def detect_pullback(stock: dict) -> dict:
 
 
 def fetch_position_prices(codes: List[str]) -> List[dict]:
-    """获取持仓股的实时数据"""
+    """获取持仓股的实时数据（单次全市场拉取）"""
     results = []
-    if not HAS_AK:
+    if not HAS_AK or not codes:
         return results
-    for code in codes:
-        try:
-            df = ak.stock_zh_a_spot_em()
-            row = df[df["代码"] == code]
-            if not row.empty:
-                r = row.iloc[0]
-                results.append({
-                    "code": code,
-                    "name": r["名称"],
-                    "current": float(r["最新价"]),
-                    "open": float(r["今开"]),
-                    "high": float(r["最高"]),
-                    "low": float(r["最低"]),
-                    "turnover_rate": float(r.get("换手率", 0)) / 100.0,
-                    "prev_close": float(r["昨收"]),
-                })
-        except Exception as e:
-            print(f"  ⚠️ {code}: {e}")
+
+    code_set = set(codes)
+    try:
+        df = ak.stock_zh_a_spot_em()
+        for _, r in df.iterrows():
+            code = str(r["代码"])
+            if code not in code_set:
+                continue
+            results.append({
+                "code": code,
+                "name": r["名称"],
+                "current": float(r["最新价"]),
+                "open": float(r["今开"]),
+                "high": float(r["最高"]),
+                "low": float(r["最低"]),
+                "turnover_rate": float(r.get("换手率", 0)) / 100.0,
+                "prev_close": float(r["昨收"]),
+            })
+    except Exception as e:
+        print(f"  ⚠️ 行情拉取失败: {e}")
     return results
 
 
