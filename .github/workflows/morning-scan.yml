@@ -1,0 +1,38 @@
+name: ☁️ 早盘扫描（云端兜底）
+
+on:
+  schedule:
+    # 北京时间 09:35 / 10:00 / 10:15 / 14:30
+    # GitHub Actions 用 UTC，所以减 8 小时
+    - cron: "35 1 * * 1-5"   # 09:35 龙回头观察池
+    - cron: "0  2 * * 1-5"   # 10:00 Alpha Lab 整点
+    - cron: "15 2 * * 1-5"   # 10:15 执行指令
+    - cron: "30 6 * * 1-5"   # 14:30 尾盘扫描
+  
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      
+      - name: 安装依赖
+        run: |
+          pip install akshare dashscope requests
+      
+      - name: 运行扫描
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python morning_scan.py
