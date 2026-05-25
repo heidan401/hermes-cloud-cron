@@ -50,7 +50,7 @@ def run_dragon_snapshot() -> dict:
 
 def run_general_reversal() -> dict:
     from trading_engine.general_reversal import run
-    return run(is_cloud=IS_CLOUD)
+    return run()
 
 
 def run_dragon_execute() -> dict:

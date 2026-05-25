@@ -56,81 +56,111 @@ def load_tracker() -> list:
 
 
 def fetch_dragon_prices(codes: list) -> list:
-    """获取龙回头候选的实时 + 资金流向数据"""
+    """获取龙回头候选的实时数据（量价 + 资金流）。
+    
+    数据源:
+    - stock_fund_flow_individual(即时): 同花顺实时资金流（全市场一次拉取）
+    - stock_zh_a_spot_em(): 东方财富实时行情（量比/高低开等）
+    """
     results = []
     if not HAS_AK or not codes:
         return results
 
+    code_set = set(codes)
+
+    # ① 拉取全市场实时资金流（同花顺）
     try:
-        df_all = ak.stock_zh_a_spot_em()
-    except Exception:
+        df_fund = ak.stock_fund_flow_individual(symbol="即时")
+        df_fund = df_fund.rename(columns={
+            "股票代码": "code", "股票简称": "name",
+            "最新价": "price_fund", "涨跌幅": "pct_str",
+            "换手率": "turnover_str", "净额": "net_flow",
+        })
+        df_fund["code"] = df_fund["code"].astype(str)
+    except Exception as e:
+        print(f"  ⚠️ 资金流拉取失败: {e}")
         return results
 
-    for code in codes:
+    # ② 拉取全市场行情（东方财富）
+    try:
+        df_spot = ak.stock_zh_a_spot_em()
+        df_spot = df_spot.rename(columns={
+            "代码": "code", "最新价": "price",
+            "涨跌幅": "pct_spot", "振幅": "amplitude",
+            "量比": "volume_ratio", "今开": "open",
+            "最高": "high", "最低": "low", "昨收": "prev_close",
+            "换手率": "turnover_spot", "市盈率-动态": "pe",
+        })
+        df_spot["code"] = df_spot["code"].astype(str)
+    except Exception as e:
+        print(f"  ⚠️ 行情拉取失败: {e}")
+        return results
+
+    # ③ 合并 + 筛选追踪池中的股票
+    import pandas as pd
+    merged = pd.merge(df_fund, df_spot, on="code", how="inner")
+    merged = merged[merged["code"].isin(code_set)]
+
+    for _, r in merged.iterrows():
+        code = str(r["code"])
+        name = str(r.get("name", ""))
+        price = float(r.get("price", 0))
+        pct_str = str(r.get("pct_str", r.get("pct_spot", "0"))).replace("%", "")
         try:
-            row = df_all[df_all["代码"] == code]
-            if row.empty:
-                continue
+            pct = float(pct_str)
+        except (ValueError, TypeError):
+            pct = 0.0
 
-            r = row.iloc[0]
-            name = r["名称"]
-            price = float(r["最新价"])
-            pct = float(r["涨跌幅"])
-            turnover = float(r.get("换手率", 0))
-            volume_ratio = float(r.get("量比", 1.0))
-            high = float(r["最高"])
-            low = float(r["最低"])
-            open_p = float(r["今开"])
-            prev = float(r["昨收"])
-            amplitude = float(r.get("振幅", 0))
+        turnover_str = str(r.get("turnover_str", r.get("turnover_spot", "0"))).replace("%", "")
+        try:
+            turnover = float(turnover_str)
+        except (ValueError, TypeError):
+            turnover = 0.0
 
-            if price > MAX_PRICE:
-                continue
+        try:
+            net_flow = float(r.get("net_flow", 0))  # 万元
+        except (ValueError, TypeError):
+            net_flow = 0.0
 
-            # 获取资金流向
-            main_inflow = 0
-            try:
-                flow_df = ak.stock_individual_fund_flow(
-                    stock=code,
-                    market="sh" if code.startswith(("6", "9")) else "sz"
-                )
-                if flow_df is not None and not flow_df.empty:
-                    latest = flow_df.iloc[-1]
-                    main_inflow = float(latest.get("主力净流入-净额", 0)) / 10000
-            except Exception:
-                pass
+        volume_ratio = float(r.get("volume_ratio", 1.0))
+        high = float(r.get("high", price))
+        low = float(r.get("low", price))
+        open_p = float(r.get("open", price))
+        prev = float(r.get("prev_close", price))
+        amplitude = float(r.get("amplitude", 0))
 
-            # 判断分歧度（价跌量缩/流入温和 = 好信号）
-            divergence = "neutral"
-            if pct < -3 and main_inflow > 500:
-                divergence = "buy_dip"       # 深跌 + 主力仍在进 = 最佳低吸
-            elif pct < -1 and main_inflow > 0:
-                divergence = "weak_buy"      # 小跌 + 主力微进
-            elif pct > 3 and main_inflow < -1000:
-                divergence = "sell_surge"    # 大涨 + 主力出 = 危险
-            elif pct < -5:
-                divergence = "abandon"       # 暴跌放弃
-            elif main_inflow > 3000:
-                divergence = "strong"        # 强势回封
+        if price > MAX_PRICE:
+            continue
 
-            results.append({
-                "code": code,
-                "name": name,
-                "price": price,
-                "pct": round(pct, 2),
-                "turnover": round(turnover, 2),
-                "volume_ratio": volume_ratio,
-                "high": high,
-                "low": low,
-                "open": open_p,
-                "prev": prev,
-                "amplitude": amplitude,
-                "main_inflow": round(main_inflow, 2),
-                "divergence": divergence,
-            })
+        # ─── 分歧度判断（量价 + 实时资金流） ───
+        divergence = "neutral"
 
-        except Exception as e:
-            print(f"  ⚠️ {code}: {e}")
+        if pct < -3 and net_flow > 500:
+            divergence = "buy_dip"       # 深跌 + 主力仍在进 = 最佳低吸
+        elif pct < -1 and net_flow > 0:
+            divergence = "weak_buy"      # 小跌 + 主力微进
+        elif pct > 3 and net_flow < -1000:
+            divergence = "sell_surge"    # 大涨 + 主力流出 = 危险
+        elif pct < -5:
+            divergence = "abandon"       # 暴跌放弃
+        elif net_flow > 3000:
+            divergence = "strong"        # 强势回封
+
+        results.append({
+            "code": code,
+            "name": name,
+            "price": price,
+            "pct": round(pct, 2),
+            "turnover": round(turnover, 2),
+            "volume_ratio": volume_ratio,
+            "high": high,
+            "low": low,
+            "open": open_p,
+            "prev": prev,
+            "amplitude": amplitude,
+            "main_inflow": round(net_flow, 2),
+            "divergence": divergence,
+        })
 
     return results
 
