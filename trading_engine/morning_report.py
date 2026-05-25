@@ -20,17 +20,29 @@ except ImportError:
 
 
 def fetch_market_overview() -> dict:
-    """获取全市场概况数据"""
+    """获取全市场概况数据 + 前日收盘简报"""
     result = {
         "time": now_str(),
         "overnight_us": None,
         "overnight_a50": None,
         "sectors_top5": [],
         "hot_concepts": [],
+        "yesterday_close": None,  # 前日收盘简报
     }
 
     if not HAS_AK:
         return result
+
+    # ─── 读取前日收盘简报 ───
+    yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
+    close_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "data", f"close_report_{yesterday}.json")
+    if os.path.exists(close_file):
+        try:
+            with open(close_file) as f:
+                result["yesterday_close"] = json.load(f)
+        except Exception:
+            pass
 
     try:
         # 美股隔夜（前一日收盘）
@@ -105,6 +117,18 @@ def build_prompt(data: dict, news: list) -> str:
         parts.append("\n板块涨幅前5:")
         for s in data["sectors_top5"]:
             parts.append(f"  {s['name']}: {s['pct']:+.2f}%")
+
+    # 前日收盘简报
+    if data.get("yesterday_close"):
+        yc = data["yesterday_close"]
+        if yc.get("hot_sectors"):
+            parts.append("\n📊 昨日收盘板块回顾:")
+            for s in yc["hot_sectors"][:5]:
+                parts.append(f"  {s['name']}: {s['pct']:+.2f}%")
+        if yc.get("alerts"):
+            parts.append("昨日异动:")
+            for a in yc["alerts"][:3]:
+                parts.append(f"  • {a}")
 
     if news:
         parts.append("\n隔夜要闻:")

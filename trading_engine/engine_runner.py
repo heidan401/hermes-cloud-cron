@@ -90,9 +90,9 @@ def run_close_report() -> dict:
         pass
 
     # 写 JSON 到 data/ 供云端第二天读取
-    import os
-    from trading_engine.common import get_data_file
-    data_dir = os.path.join(os.path.dirname(get_data_file(".")), "data")
+    # 数据目录：engine_runner.py 的上两级 = github-actions-cron 仓库根
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(repo_root, "data")
     os.makedirs(data_dir, exist_ok=True)
     json_path = os.path.join(data_dir, f"close_report_{datetime.now(TZ).strftime('%Y%m%d')}.json")
     with open(json_path, "w") as f:

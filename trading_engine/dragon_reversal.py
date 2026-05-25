@@ -187,17 +187,30 @@ def analyze_snapshot(stocks: list) -> list:
 
 
 def analyze_execute(stocks: list) -> list:
-    """10:15 执行指令 — 分歧低吸判断"""
+    """10:15 执行指令 — 分歧低吸判断，对比 09:35 快照看流入变化"""
+    # 加载 09:35 快照
+    snapshot_data = {}
+    if os.path.exists(SNAPSHOT_FILE):
+        with open(SNAPSHOT_FILE) as f:
+            for snap in json.load(f):
+                snapshot_data[snap["code"]] = snap
+
     instructions = []
 
     for s in stocks:
         div = s["divergence"]
+        snap = snapshot_data.get(s["code"], {})
+        snap_inflow = snap.get("main_inflow", s["main_inflow"])
+        inflow_delta = s["main_inflow"] - snap_inflow
+        delta_str = f" | 较09:35 {'+' if inflow_delta >= 0 else ''}{inflow_delta:.0f}万" if snap else ""
+
         instr = {
             "code": s["code"],
             "name": s["name"],
             "price": s["price"],
             "pct": s["pct"],
             "main_inflow": s["main_inflow"],
+            "inflow_delta": round(inflow_delta, 0),
             "divergence": div,
             "action": "等待",
             "reason": "",
@@ -208,26 +221,26 @@ def analyze_execute(stocks: list) -> list:
             support = round(s["price"] * 0.97, 2)  # 支撑位：现价 -3%
             instr["action"] = "🎯 买入"
             instr["reason"] = (
-                f"分歧低吸信号：跌 {s['pct']}% 但主力仍流入 {s['main_inflow']}万\n"
+                f"分歧低吸信号：跌 {s['pct']}% 但主力仍流入 {s['main_inflow']}万{delta_str}\n"
                 f"支撑位: {support} 元 | 止损: {round(support * 0.95, 2)} 元\n"
                 f"买入价: {s['price']} | 仓位: 100股({s['price']*100:.0f}元)"
             )
         elif div == "weak_buy":
             # 条件稍弱，提示关注
             instr["action"] = "👀 关注"
-            instr["reason"] = f"小跌 {s['pct']}% + 主力微进 {s['main_inflow']}万，等待更大跌幅或尾盘确认"
+            instr["reason"] = f"小跌 {s['pct']}% + 主力微进 {s['main_inflow']}万{delta_str}，等待更大跌幅或尾盘确认"
         elif div == "sell_surge":
             instr["action"] = "🚫 放弃"
-            instr["reason"] = f"大涨 {s['pct']}% 但主力流出 {s['main_inflow']}万，诱多嫌疑"
+            instr["reason"] = f"大涨 {s['pct']}% 但主力流出 {s['main_inflow']}万{delta_str}，诱多嫌疑"
         elif div == "abandon":
             instr["action"] = "💀 放弃"
             instr["reason"] = f"暴跌 {s['pct']}%，逻辑失效"
         elif div == "strong":
             instr["action"] = "🔥 强势"
-            instr["reason"] = f"主力强势回封 {s['main_inflow']}万，可轻仓追涨"
+            instr["reason"] = f"主力强势回封 {s['main_inflow']}万{delta_str}，可轻仓追涨"
         else:
             instr["action"] = "⏳ 等待"
-            instr["reason"] = f"信号不明确，换手 {s['turnover']}%，量比 {s['volume_ratio']}"
+            instr["reason"] = f"信号不明确，换手 {s['turnover']}%，量比 {s['volume_ratio']}{delta_str}"
 
         instructions.append(instr)
 
