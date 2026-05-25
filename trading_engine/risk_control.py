@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from trading_engine.common import TZ, now_str, today_str, feishu_send
+from trading_engine.common import TZ, now_str, today_str, feishu_send, get_data_file
 
 try:
     import akshare as ak
@@ -235,9 +235,9 @@ def run(positions: list = None) -> dict:
 
 
 def _load_holdings_local() -> list:
-    """从本地 holdings.md 加载持仓（仅本地可用）"""
+    """从 holdings.md 加载持仓（本地+云端通用）"""
     positions = []
-    holding_file = os.path.expanduser("~/天才交易员/holdings.md")
+    holding_file = get_data_file("holdings.md")
     if not os.path.exists(holding_file):
         return positions
 

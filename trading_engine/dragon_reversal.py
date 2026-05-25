@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from trading_engine.common import TZ, now_str, today_str, feishu_send
+from trading_engine.common import TZ, now_str, today_str, feishu_send, get_data_file
 
 try:
     import akshare as ak
@@ -17,8 +17,8 @@ except ImportError:
     HAS_AK = False
 
 # ─── 龙回头追踪文件路径 ──────────────────────────────
-TRACKER_FILE = os.path.expanduser("~/天才交易员/dragon_tracker.md")
-SNAPSHOT_FILE = os.path.expanduser("~/天才交易员/dragon_snapshot.json")
+TRACKER_FILE = get_data_file("dragon_tracker.md")
+SNAPSHOT_FILE = get_data_file("dragon_snapshot.json")
 
 MAX_PRICE = 25.65
 MODE_SNAPSHOT = "snapshot"    # 09:35 静默基准

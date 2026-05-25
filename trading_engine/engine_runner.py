@@ -11,12 +11,16 @@
   python engine_runner.py 15:00    # 收盘简报
 """
 
+import os
 import sys
 import json
 import traceback
 from datetime import datetime
 
 from trading_engine.common import TZ, now_str, feishu_send
+
+# 自动识别运行环境：GitHub Actions 设置 GITHUB_ACTIONS=true
+IS_CLOUD = os.getenv("GITHUB_ACTIONS", "").lower() == "true"
 
 SLOTS = {
     "09:00": "morning_report",
@@ -46,7 +50,7 @@ def run_dragon_snapshot() -> dict:
 
 def run_general_reversal() -> dict:
     from trading_engine.general_reversal import run
-    return run()
+    return run(is_cloud=IS_CLOUD)
 
 
 def run_dragon_execute() -> dict:
@@ -87,7 +91,8 @@ def run_close_report() -> dict:
 
     # 写 JSON 到 data/ 供云端第二天读取
     import os
-    data_dir = os.path.expanduser("~/天才交易员/github-actions-cron/data/")
+    from trading_engine.common import get_data_file
+    data_dir = os.path.join(os.path.dirname(get_data_file(".")), "data")
     os.makedirs(data_dir, exist_ok=True)
     json_path = os.path.join(data_dir, f"close_report_{datetime.now(TZ).strftime('%Y%m%d')}.json")
     with open(json_path, "w") as f:

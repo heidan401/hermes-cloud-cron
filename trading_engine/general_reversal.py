@@ -1,7 +1,9 @@
 """
-10:00 ☁️/🖥️ 通用反转扫描 — 今日主力突然大幅流入 + 打分 ≥6 分推荐
-不要求"连续流出→转正"（那是龙回头的逻辑）。
-独立于龙回头管线，每次独立扫描。
+10:00 ☁️/🖥️ 通用反转扫描 — 云端实时量价版
+☁️ 云端 (GitHub Actions): 纯量价扫描，无资金流（stock_individual_fund_flow 是 T+1 数据）
+🖥️ 本地 (Hermes Alpha Lab): 用 stock CLI 做完整资金流分析
+
+独立于龙回头管线，每次独立扫描。打分 ≥5 分推荐。
 """
 
 import json
@@ -17,14 +19,15 @@ try:
 except ImportError:
     HAS_AK = False
 
-# ─── 打分规则 ──────────────────────────────────────
+# ─── 打分规则（纯量价，无资金流依赖） ──────────────
 SCORING = {
-    "major_inflow": 3,      # 主力净流入 > 2000万
-    "turnover": 2,          # 换手率 3%-15%
-    "j_value": 2,           # J 值 < 30（超卖反转）
-    "pct_range": 2,         # 涨幅 2%-8%
-    "volatility": 1,        # 近5日振幅 > 5%
+    "turnover": 3,          # 换手率 3%-15%（活跃度高）
+    "pct_range": 2,         # 涨幅 2%-8%（不冷不热，刚好）
+    "volatility": 2,        # 近5日振幅 > 5%（有波动才有机会）
+    "volume_surge": 2,      # 量比 > 2（异常放量 = 资金关注）
+    "liquidity": 1,         # 成交额 > 5亿（流动性好）
 }
+MAX_SCORE = sum(SCORING.values())  # 10
 
 PENALTIES = {
     "pullback": -2,         # 冲高回落（最高价-现价 > 5%）
@@ -33,8 +36,9 @@ PENALTIES = {
     "chiNext": -99,         # 创业板（无权限）
 }
 
-MIN_SCORE = 6               # 推荐阈值
+MIN_SCORE = 5               # 推荐阈值
 MAX_PRICE = 25.65           # 价格上限
+TOP_N = 500                 # 按成交额取前N只活跃股
 
 
 def check_eligibility(stock: dict) -> bool:
@@ -58,7 +62,7 @@ def check_eligibility(stock: dict) -> bool:
 
 
 def score_stock(stock: dict) -> dict:
-    """对单只股票打分"""
+    """对单只股票打分（纯量价维度，无资金流）"""
     score = 0
     reasons = []
     penalties = []
@@ -66,22 +70,14 @@ def score_stock(stock: dict) -> dict:
 
     pct_change = stock.get("pct_change", 0)
     turnover = stock.get("turnover_rate", 0)
-    inflow = stock.get("main_inflow", 0)
     current = stock.get("current", 0)
     high = stock.get("high", 0)
     volume_ratio = stock.get("volume_ratio", 1.0)
     pe = stock.get("pe", 30)
+    amplitude = stock.get("amplitude", 0)
+    amount = stock.get("amount", 0)  # 成交额（元）
 
-    # ➕ 主力大幅流入
-    if inflow > 2000:
-        score += SCORING["major_inflow"]
-        reasons.append(f"主力净流入 {inflow:.0f}万")
-        metrics["inflow_pct"] = round(inflow / 10000, 2)
-    elif inflow > 1000:
-        score += 1
-        reasons.append(f"主力净流入 {inflow:.0f}万")
-
-    # ➕ 换手率适中
+    # ➕ 换手率适中（最核心的活跃度指标）
     if 0.03 < turnover <= 0.15:
         score += SCORING["turnover"]
         reasons.append(f"换手率 {turnover*100:.1f}%")
@@ -97,20 +93,23 @@ def score_stock(stock: dict) -> dict:
         score += 1
         reasons.append(f"涨幅 {pct_change*100:.1f}%")
 
-    # ➕ 振幅
-    amplitude = stock.get("amplitude", 0)
+    # ➕ 振幅（波动=机会）
     if amplitude > 0.05:
         score += SCORING["volatility"]
         reasons.append(f"振幅 {amplitude*100:.1f}%")
 
-    # ➕ J值（需要KDJ数据）
-    j = stock.get("j_value")
-    if j is not None and j < 30:
-        score += SCORING["j_value"]
-        reasons.append(f"J值={j:.0f}（超卖区）")
-    elif j is not None and j < 50:
+    # ➕ 量比异常（放量=资金关注）
+    if volume_ratio > 2.0:
+        score += SCORING["volume_surge"]
+        reasons.append(f"量比 {volume_ratio:.1f}x")
+    elif volume_ratio > 1.5:
         score += 1
-        reasons.append(f"J值={j:.0f}")
+        reasons.append(f"量比 {volume_ratio:.1f}x")
+
+    # ➕ 流动性（成交额大=进出方便）
+    if amount > 5e8:  # > 5亿
+        score += SCORING["liquidity"]
+        reasons.append(f"成交额 {amount/1e8:.1f}亿")
 
     # ➖ 冲高回落
     if high > 0 and current > 0:
@@ -147,23 +146,23 @@ def score_stock(stock: dict) -> dict:
 
 
 def scan_candidates() -> list:
-    """扫描 A 股全市场，返回 ≥6 分的候选"""
+    """扫描 A 股全市场 — 单次 stock_zh_a_spot_em 调用，无逐只 API"""
     candidates = []
     if not HAS_AK:
         return candidates
 
-    print("  🔍 扫描全市场主力流入...")
+    print("  🔍 扫描全市场量价信号（纯实时数据，无资金流）...")
     try:
-        # 用 stock_zh_a_spot_em 获取全量
+        # 单次全市场拉取
         df = ak.stock_zh_a_spot_em()
-        print(f"    获取 {len(df)} 只")
+        print(f"    全市场 {len(df)} 只")
 
-        # 按成交额排序取前 500（排除无成交的死股）
-        df = df.sort_values("成交额", ascending=False).head(500)
+        # 按成交额排序取前 N 只活跃股
+        df = df.sort_values("成交额", ascending=False).head(TOP_N)
 
         for _, row in df.iterrows():
-            code = row["代码"]
-            name = row["名称"]
+            code = str(row["代码"])
+            name = str(row["名称"])
 
             # 基础过滤
             stock = {
@@ -175,21 +174,12 @@ def scan_candidates() -> list:
                 "turnover_rate": float(row.get("换手率", 0)) / 100.0,
                 "volume_ratio": float(row.get("量比", 1.0)),
                 "pe": float(row.get("市盈率-动态", 30) or 30),
-                "main_inflow": 0,
                 "amplitude": float(row.get("振幅", 0)) / 100.0,
+                "amount": float(row.get("成交额", 0)),
             }
 
             if not check_eligibility(stock):
                 continue
-
-            # 获取资金流向
-            try:
-                flow_df = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith(("6", "9")) else "sz")
-                if flow_df is not None and not flow_df.empty:
-                    latest = flow_df.iloc[-1]
-                    stock["main_inflow"] = float(latest.get("主力净流入-净额", 0)) / 10000  # 转万元
-            except Exception:
-                pass
 
             result = score_stock(stock)
             if result["eligible"]:
@@ -204,16 +194,23 @@ def scan_candidates() -> list:
     return candidates
 
 
-def run() -> dict:
-    """主入口 — 通用反转扫描并推送"""
-    print(f"[{now_str()}] 🔄 通用反转引擎启动...")
+def run(is_cloud: bool = False) -> dict:
+    """主入口 — 通用反转扫描并推送。
+    
+    is_cloud: True = GitHub Actions 环境（量价版，标注"轻量扫描"）
+              False = 本地（后续 Alpha Lab 会做资金流补充）
+    """
+    print(f"[{now_str()}] 🔄 通用反转引擎启动{' (☁️ 云端量价版)' if is_cloud else ''}...")
 
     candidates = scan_candidates()
     print(f"  🎯 候选 {len(candidates)} 只")
 
     if not candidates:
-        msg = "📭 今日无通用反转候选（无 ≥6 分推荐）"
-        feishu_send(f"🔄 通用反转 | {now_str('%H:%M')}", msg)
+        label = "☁️ 云端轻量扫描" if is_cloud else "🔄 通用反转"
+        msg = f"📭 今日无通用反转候选（无 ≥{MIN_SCORE} 分推荐）"
+        if is_cloud:
+            msg += "\n\n⚠️ 云端版仅用量价维度打分，不含资金流向。完整分析请等 10:30 Alpha Lab。"
+        feishu_send(f"{label} | {now_str('%H:%M')}", msg)
         return {"pushed": True, "candidates": [], "count": 0}
 
     # 取前5
@@ -221,11 +218,11 @@ def run() -> dict:
 
     lines = []
     for i, s in enumerate(top, 1):
-        status = "🔥" if s["score"] >= 9 else "⭐" if s["score"] >= 7 else "📌"
+        status = "🔥" if s["score"] >= 8 else "⭐" if s["score"] >= 6 else "📌"
         lines.append(f"{status} #{i} **{s['name']}**({s['code']}) — {s['score']}分")
         lines.append(f"   现价 {s['metrics']['price']:.2f} | {s['metrics']['pct_change']:+.2f}% | 换手 {s['metrics']['turnover_pct']:.1f}%")
-        if s.get("main_inflow"):
-            lines.append(f"   主力净流入 {s['main_inflow']:.0f}万")
+        if s.get("amount"):
+            lines.append(f"   成交额 {s['amount']/1e8:.1f}亿 | 量比 {s['metrics']['volume_ratio']:.1f}")
         if s["reasons"]:
             lines.append(f"   ➕ {' | '.join(s['reasons'])}")
         if s["penalties"]:
@@ -234,9 +231,12 @@ def run() -> dict:
 
     body = "\n".join(lines)
     body += "─" * 20 + "\n"
-    body += f"⏰ 通用反转引擎 {now_str('%H:%M')} | 扫描500只 | 候选{len(candidates)}只"
+    body += f"⏰ 通用反转引擎 {now_str('%H:%M')} | 扫描 {TOP_N} 只 | 候选 {len(candidates)} 只"
+    if is_cloud:
+        body += "\n☁️ 云端轻量版 — 纯量价维度，不含资金流向"
 
-    title = f"🔄 通用反转推荐 | {now_str('%m/%d %H:%M')}"
+    label = "☁️ 通用反转(云端量价)" if is_cloud else "🔄 通用反转推荐"
+    title = f"{label} | {now_str('%m/%d %H:%M')}"
     pushed = feishu_send(title, body).get("success", False)
 
     print(f"  📤 推送 {'✅' if pushed else '❌'}")
@@ -244,5 +244,5 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
-    result = run()
+    result = run(is_cloud=True)
     print(json.dumps(result, ensure_ascii=False, indent=2))

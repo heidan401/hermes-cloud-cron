@@ -167,3 +167,25 @@ def minutes_to_next_slot(slot_minutes: list = None) -> int:
             slot += timedelta(minutes=30)
         return (slot - now).seconds // 60
     return 30
+
+
+# ─── 跨环境文件路径 ──────────────────────────────
+
+def get_data_file(rel_path: str) -> str:
+    """跨环境解析数据文件路径。
+    
+    云端 (GITHUB_ACTIONS=true):
+        文件放在仓库根目录，trading_engine/ 的父目录。
+        如 'dragon_tracker.md' → <repo_root>/dragon_tracker.md
+    
+    本地:
+        文件放在 ~/天才交易员/
+        如 'dragon_tracker.md' → ~/天才交易员/dragon_tracker.md
+    """
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        # 云端：trading_engine/ 的父目录 = 仓库根
+        engine_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(engine_dir)
+        return os.path.join(repo_root, rel_path)
+    else:
+        return os.path.expanduser(f"~/天才交易员/{rel_path}")
