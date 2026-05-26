@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write  # 允许 git push 快照文件
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PYTHONPATH: ${{ github.workspace }}
@@ -49,28 +49,40 @@ jobs:
           echo "slot=$SLOT" >> $GITHUB_OUTPUT
       
       - name: 🕘 09:00 隔夜早报
+        id: step_0900
         if: steps.slot.outputs.slot == '09:00' || steps.slot.outputs.slot == 'test_all'
+        continue-on-error: true
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: python trading_engine/engine_runner.py 09:00
+        run: |
+          python trading_engine/engine_runner.py 09:00 2>&1 | tee /tmp/out_0900.txt
+          echo "EXIT_0900=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
       
       - name: 🛡️ 09:30 持仓风控
+        id: step_0930
         if: steps.slot.outputs.slot == '09:30' || steps.slot.outputs.slot == 'test_all'
+        continue-on-error: true
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: python trading_engine/engine_runner.py 09:30
+        run: |
+          python trading_engine/engine_runner.py 09:30 2>&1 | tee /tmp/out_0930.txt
+          echo "EXIT_0930=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
       
       - name: 📸 09:35 龙回头快照
+        id: step_0935
         if: steps.slot.outputs.slot == '09:35' || steps.slot.outputs.slot == 'test_all'
-        run: python trading_engine/engine_runner.py 09:35
+        continue-on-error: true
+        run: |
+          python trading_engine/engine_runner.py 09:35 2>&1 | tee /tmp/out_0935.txt
+          echo "EXIT_0935=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
 
       - name: 📤 推送快照到仓库
-        if: steps.slot.outputs.slot == '09:35' || steps.slot.outputs.slot == 'test_all'
+        if: (steps.slot.outputs.slot == '09:35' || steps.slot.outputs.slot == 'test_all') && steps.step_0935.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -79,19 +91,52 @@ jobs:
           git push
       
       - name: 🔄 10:00 通用反转
+        id: step_1000
         if: steps.slot.outputs.slot == '10:00' || steps.slot.outputs.slot == 'test_all'
+        continue-on-error: true
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: python trading_engine/engine_runner.py 10:00
+        run: |
+          python trading_engine/engine_runner.py 10:00 2>&1 | tee /tmp/out_1000.txt
+          echo "EXIT_1000=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
       
       - name: 🐉 10:15 龙回头执行
+        id: step_1015
         if: steps.slot.outputs.slot == '10:15' || steps.slot.outputs.slot == 'test_all'
+        continue-on-error: true
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
         run: |
           git pull origin main 2>/dev/null || true
-          python trading_engine/engine_runner.py 10:15
+          python trading_engine/engine_runner.py 10:15 2>&1 | tee /tmp/out_1015.txt
+          echo "EXIT_1015=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: 📋 生成诊断报告
+        if: steps.slot.outputs.slot == 'test_all'
+        run: |
+          {
+            echo "=== 全链路诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ==="
+            for slot in 0900 0930 0935 1000 1015; do
+              echo ""
+              echo "--- $slot ---"
+              echo "EXIT: $(eval echo \${{ steps.step_${slot}.outputs.EXIT_${slot} }})"
+              echo "OUTCOME: $(eval echo \${{ steps.step_${slot}.outcome }})"
+              echo ""
+              cat /tmp/out_${slot}.txt 2>/dev/null | tail -10
+            done
+          } > /tmp/diag.txt
+          cp /tmp/diag.txt diagnostic.txt
+          cat /tmp/diag.txt
+    
+      - name: 📤 提交诊断
+        if: steps.slot.outputs.slot == 'test_all'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add diagnostic.txt
+          git diff --staged --quiet || git commit -m "📋 全链路诊断 $(TZ='Asia/Shanghai' date +%m/%d_%H%M)"
+          git push
