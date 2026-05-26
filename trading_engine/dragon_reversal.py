@@ -25,6 +25,36 @@ MODE_SNAPSHOT = "snapshot"    # 09:35 静默基准
 MODE_EXECUTE = "execute"      # 10:15 执行指令
 MODE_CLOSE = "close"          # 14:30 尾盘
 
+# 飞书单条消息上限（留余量）
+FEISHU_MAX_CHARS = 3500
+
+
+def feishu_send_split(title: str, sections: list):
+    """分条发送：自动拆分为多条飞书消息，不截断内容。
+    
+    每条消息标题格式: "标题 (1/3)"、"标题 (2/3)" 等。
+    sections: [str, str, ...] 每个字符串是一个独立段落。
+    """
+    messages = []
+    current = ""
+    for sec in sections:
+        test = current + ("\n\n" if current else "") + sec
+        if len(test) > FEISHU_MAX_CHARS and current:
+            # 当前消息已满，先发送
+            messages.append(current)
+            current = sec
+        else:
+            current = test
+    if current:
+        messages.append(current)
+    
+    total = len(messages)
+    for i, body in enumerate(messages, 1):
+        suffix = f" ({i}/{total})" if total > 1 else ""
+        feishu_send(f"{title}{suffix}", body)
+    
+    return {"pushed": True, "chunks": total}
+
 
 def load_tracker() -> list:
     """从 dragon_tracker.md 加载活跃追踪股票（仅「活跃追踪」表）"""
@@ -394,32 +424,28 @@ def run(mode: str = MODE_EXECUTE) -> dict:
     print(f"  💹 获取 {len(prices)} 只实时数据")
 
     if not prices:
-        print("  ❌ 实时数据获取失败（行情API超时），仅输出 tracker 摘要")
-        # 构造降级推送：精简每条 tracker 的关键信息
-        lines = [f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}", ""]
-        lines.append("⚠️ 实时行情 API 超时（已重试3次），以下为 tracker 关键摘要")
-        lines.append("")
-        # 限制总长度：每条最多输出 120 字，最多 5 只
-        for p in pending[:5]:
+        print("  ❌ 实时数据获取失败（行情API超时），分条推送 tracker 完整数据")
+        title = f"🐉 龙回头 | {now_str('%m/%d %H:%M')}"
+        
+        # 构建段落：标题段 + 每只股票一个段
+        sections = []
+        header = f"⚠️ 实时行情 API 超时（已重试3次）\n以下为 tracker 完整数据，共 {len(pending)} 只\n"
+        header += "─" * 15
+        sections.append(header)
+        
+        for p in pending:
             code = p["code"]
             raw = p.get("raw", [])
             name = raw[1] if len(raw) > 1 else "?"
-            # 提取关键信息：前80字 + 价格/目标
             status = p["status"]
-            # 只提取状态标记 + 最后一句（目标/止损）
-            short_status = status.replace(" | ", "·")[:100].rstrip("，。.") 
-            lines.append(f"• {code} {name}")
-            lines.append(f"  {short_status}")
-            lines.append("")
-        if len(pending) > 5:
-            lines.append(f"  ...等共 {len(pending)} 只")
-        body = "\n".join(lines)
-        # 飞书消息上限约 4000 字符，截断保护
-        if len(body) > 3500:
-            body = body[:3500] + "\n\n(消息过长已截断)"
-        body += "\n" + "─" * 20 + "\n"
-        body += f"⏰ {now_str('%H:%M')} | 追踪 {len(pending)}只 | 行情API超时(已重试3次)"
-        feishu_send(f"🐉 龙回头 | {now_str('%m/%d %H:%M')}", body)
+            # 每只股票作为一个独立段落
+            stock_block = f"• {code} {name}\n  {status}"
+            sections.append(stock_block)
+        
+        footer = f"⏰ {now_str('%H:%M')} | 追踪 {len(pending)}只 | 行情API超时(已重试3次)"
+        sections.append(footer)
+        
+        result = feishu_send_split(title, sections)
         return {"mode": mode, "pushed": True, "count": len(pending), "results": []}
 
     if mode == MODE_SNAPSHOT:
@@ -432,15 +458,13 @@ def run(mode: str = MODE_EXECUTE) -> dict:
         analysis = analyze_execute(prices)
         results = analysis["results"]
         
-        # ─── 构造丰富推送 ───
-        lines = []
+        # ─── 构造丰富推送（分条，不截断） ───
+        sections = []
         
         # §1 标题
-        lines.append(f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}")
-        lines.append("")
+        sections.append(f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}")
         
-        # §2 Day 2 回访 — 每只候选的实时数据+判定
-        lines.append("━━━ 📊 Day 2 回访 ━━━")
+        # §2 Day 2 回访 — 每只股票一个段落
         for r in results:
             pct_sign = "+" if r["pct"] >= 0 else ""
             flow_str = f"{r['main_inflow']/10000:.2f}亿" if abs(r['main_inflow']) >= 10000 else f"{r['main_inflow']:.0f}万"
@@ -449,61 +473,61 @@ def run(mode: str = MODE_EXECUTE) -> dict:
                 d = r["inflow_delta"]
                 delta_str = f" | 较09:35 {'+' if d>=0 else ''}{d:.0f}万"
             
-            lines.append(f"• {r['action_icon']} **{r['name']}**({r['code']}) {r['price']:.2f} {pct_sign}{r['pct']:.2f}%")
-            lines.append(f"  主力{flow_str} | 换手{r['turnover']:.1f}% | 量比{r['vol_ratio']:.2f}{delta_str}")
+            stock_lines = []
+            stock_lines.append(f"{r['action_icon']} **{r['name']}**({r['code']}) {r['price']:.2f} {pct_sign}{r['pct']:.2f}%")
+            stock_lines.append(f"主力{flow_str} | 换手{r['turnover']:.1f}% | 量比{r['vol_ratio']:.2f}{delta_str}")
             if r["drawdown_from_high"] > 0.5:
-                lines.append(f"  最高{r['high']:.2f}→现{r['price']:.2f}(上影{r['drawdown_from_high']:.1f}%)")
+                stock_lines.append(f"最高{r['high']:.2f}→现{r['price']:.2f}(上影{r['drawdown_from_high']:.1f}%)")
             for a in r["analysis"]:
-                lines.append(f"  → {a}")
-            lines.append(f"  判断: {r['action']} | {r['instruction']}")
-            lines.append("")
+                stock_lines.append(f"→ {a}")
+            stock_lines.append(f"判断: {r['action']} | {r['instruction']}")
+            sections.append("\n".join(stock_lines))
         
         # §3 今日指令汇总
-        lines.append("━━━ 🎯 今日指令 ━━━")
         buy_list = [r for r in results if "买入" in r["instruction"]]
         watch_list = [r for r in results if "关注" in r["action"] or "观察" in r["action"]]
         wait_list = [r for r in results if "不买" in r["instruction"] or "观望" in r["action"] or "不明" in r["instruction"]]
         
+        cmd_lines = ["━━━ 🎯 今日指令 ━━━"]
         if buy_list:
             for r in buy_list:
-                lines.append(f"🎯 买入 **{r['name']}**({r['code']}) → {r['instruction']}")
-                lines.append(f"   区间: {r['buy_zone']} | 现价: {r['price']:.2f}")
+                cmd_lines.append(f"🎯 买入 **{r['name']}**({r['code']}) → {r['instruction']}")
+                cmd_lines.append(f"   区间: {r['buy_zone']} | 现价: {r['price']:.2f}")
         else:
-            lines.append("买入 0 只")
-        
+            cmd_lines.append("买入 0 只")
         if watch_list:
             for r in watch_list:
-                lines.append(f"👀 关注 **{r['name']}**({r['code']}) → {r['instruction']}")
+                cmd_lines.append(f"👀 关注 **{r['name']}**({r['code']}) → {r['instruction']}")
         if wait_list:
             names = "、".join([r['name'] for r in wait_list])
-            lines.append(f"⏳ 等待: {names}（{'全涨停封死' if analysis['limit_up_count'] >= len(wait_list) else '信号不明'}，无分歧低吸窗口）")
-        
-        lines.append("")
+            cmd_lines.append(f"⏳ 等待: {names}（{'全涨停封死' if analysis['limit_up_count'] >= len(wait_list) else '信号不明'}，无分歧低吸窗口）")
+        sections.append("\n".join(cmd_lines))
         
         # §4 明日关注
-        lines.append("━━━ 📅 明日关注 ━━━")
+        tmr_lines = ["━━━ 📅 明日关注 ━━━"]
         tomorrow = (datetime.now(TZ) + timedelta(days=1))
         for r in results:
             if r["is_limit_up"]:
                 target_high = round(r["price"] * 1.05, 2)
                 dip_zone = f"{round(r['price'] * 0.92, 2)}-{round(r['price'] * 0.95, 2)}"
-                lines.append(f"• {r['name']}({r['code']}) 今日涨停 {r['price']:.2f}")
-                lines.append(f"  明日若回踩 {dip_zone} + 主力续流入 → 尾盘可考虑")
-                lines.append(f"  目标: {target_high} | 100股 ≈ {r['price']*100:.0f}元")
+                tmr_lines.append(f"• {r['name']}({r['code']}) 今日涨停 {r['price']:.2f}")
+                tmr_lines.append(f"  明日若回踩 {dip_zone} + 主力续流入 → 尾盘可考虑")
+                tmr_lines.append(f"  目标: {target_high} | 100股 ≈ {r['price']*100:.0f}元")
             elif "买入" in r["instruction"]:
-                lines.append(f"• {r['name']}({r['code']}) {r['instruction']}")
-                lines.append(f"  区间: {r['buy_zone']}")
+                tmr_lines.append(f"• {r['name']}({r['code']}) {r['instruction']}")
+                tmr_lines.append(f"  区间: {r['buy_zone']}")
+        sections.append("\n".join(tmr_lines))
         
-        lines.append("")
-        body = "\n".join(lines)
-        body += "─" * 20 + "\n"
-        body += f"⏰ 龙回头执行引擎 {now_str('%H:%M')} | "
-        body += f"追踪 {analysis['total']}只 | 涨停 {analysis['limit_up_count']}只 | "
-        body += f"买入 {analysis['buy_count']} | 关注 {analysis['watch_count']}"
+        # §5 底部
+        footer = "─" * 20 + "\n"
+        footer += f"⏰ 龙回头执行引擎 {now_str('%H:%M')} | "
+        footer += f"追踪 {analysis['total']}只 | 涨停 {analysis['limit_up_count']}只 | "
+        footer += f"买入 {analysis['buy_count']} | 关注 {analysis['watch_count']}"
+        sections.append(footer)
 
         title = f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}"
-        result = feishu_send(title, body)
-        pushed = result.get("success", False)
+        split_result = feishu_send_split(title, sections)
+        pushed = split_result.get("pushed", False)
 
         # 有买入信号时额外推送
         buy_results = [r for r in results if "买入" in r["instruction"]]
