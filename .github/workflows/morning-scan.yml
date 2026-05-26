@@ -8,6 +8,8 @@ on:
     - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
     - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
     - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
+  push:
+    branches: [test-*]  # 测试分支触发
   workflow_dispatch:  # 手动触发
 
 jobs:
