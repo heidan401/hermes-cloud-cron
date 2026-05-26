@@ -27,31 +27,37 @@ MODE_CLOSE = "close"          # 14:30 尾盘
 
 
 def load_tracker() -> list:
-    """从 dragon_tracker.md 加载待观察的 Day 2 股票"""
+    """从 dragon_tracker.md 加载活跃追踪股票（仅「活跃追踪」表）"""
     stocks = []
     if not os.path.exists(TRACKER_FILE):
         return stocks
 
     with open(TRACKER_FILE) as f:
-        in_table = False
+        in_active_table = False
         for line in f:
             line = line.strip()
-            if line.startswith("|--"):
+            # 只解析「活跃追踪」区域，遇到「历史归档」或下一节就停止
+            if "📦 历史归档" in line or "## 📊" in line:
+                if in_active_table:
+                    break
+            if "🔴 活跃追踪" in line:
+                in_active_table = True
                 continue
-            if line.startswith("| 追踪") or line.startswith("| 代码"):
-                in_table = True
+            if not in_active_table:
                 continue
-            if in_table and line.startswith("|"):
-                parts = [p.strip() for p in line.split("|") if p.strip()]
-                if len(parts) >= 2:
-                    code = parts[0]
-                    status = parts[-1] if len(parts) > 2 else "⏳"
-                    stocks.append({
-                        "code": code,
-                        "status": status,
-                        "raw": parts,
-                    })
-
+            if line.startswith("|--") or not line.startswith("|"):
+                continue
+            if "代码" in line and "名称" in line:
+                continue
+            parts = [p.strip() for p in line.split("|") if p.strip()]
+            if len(parts) >= 2:
+                code = parts[0]
+                status = parts[-1]
+                stocks.append({
+                    "code": code,
+                    "status": status,
+                    "raw": parts,
+                })
     return stocks
 
 
@@ -254,7 +260,12 @@ def run(mode: str = MODE_EXECUTE) -> dict:
     print(f"[{now_str()}] 🐉 龙回头引擎启动 (mode={mode})...")
 
     # 读取追踪文件
-    pending = [s for s in load_tracker() if "⏳" in s["status"] or "待观察" in s["status"]]
+    # 筛选活跃追踪（排除 ❌ 淘汰和 📦 归档的）
+    pending = [s for s in load_tracker() 
+               if "❌" not in s["status"] 
+               and "淘汰" not in s["status"]
+               and "归档" not in s["status"]
+               and s["code"] not in ("—", "代码", "")]
     print(f"  📋 追踪池: {len(pending)} 只待观察")
 
     if not pending:
