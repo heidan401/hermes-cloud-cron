@@ -67,40 +67,59 @@ def fetch_dragon_prices(codes: list) -> list:
     数据源:
     - stock_fund_flow_individual(即时): 同花顺实时资金流（全市场一次拉取）
     - stock_zh_a_spot_em(): 东方财富实时行情（量比/高低开等）
+    
+    2026-05-26: 增加重试逻辑（收盘后API容易超时）
     """
     results = []
     if not HAS_AK or not codes:
         return results
 
+    import time as _time
     code_set = set(codes)
 
-    # ① 拉取全市场实时资金流（同花顺）
-    try:
-        df_fund = ak.stock_fund_flow_individual(symbol="即时")
-        df_fund = df_fund.rename(columns={
-            "股票代码": "code", "股票简称": "name",
-            "最新价": "price_fund", "涨跌幅": "pct_str",
-            "换手率": "turnover_str", "净额": "net_flow",
-        })
-        df_fund["code"] = df_fund["code"].astype(str)
-    except Exception as e:
-        print(f"  ⚠️ 资金流拉取失败: {e}")
+    # ① 拉取全市场实时资金流（同花顺）— 重试最多3次
+    df_fund = None
+    for attempt in range(3):
+        try:
+            df_fund = ak.stock_fund_flow_individual(symbol="即时")
+            break
+        except Exception as e:
+            print(f"  ⚠️ 资金流拉取尝试 {attempt+1}/3 失败: {e}")
+            if attempt < 2:
+                _time.sleep(3)
+    if df_fund is None:
+        print("  ❌ 资金流3次重试全部失败")
         return results
 
-    # ② 拉取全市场行情（东方财富）
-    try:
-        df_spot = ak.stock_zh_a_spot_em()
-        df_spot = df_spot.rename(columns={
-            "代码": "code", "最新价": "price",
-            "涨跌幅": "pct_spot", "振幅": "amplitude",
-            "量比": "volume_ratio", "今开": "open",
-            "最高": "high", "最低": "low", "昨收": "prev_close",
-            "换手率": "turnover_spot", "市盈率-动态": "pe",
-        })
-        df_spot["code"] = df_spot["code"].astype(str)
-    except Exception as e:
-        print(f"  ⚠️ 行情拉取失败: {e}")
+    df_fund = df_fund.rename(columns={
+        "股票代码": "code", "股票简称": "name",
+        "最新价": "price_fund", "涨跌幅": "pct_str",
+        "换手率": "turnover_str", "净额": "net_flow",
+    })
+    df_fund["code"] = df_fund["code"].astype(str)
+
+    # ② 拉取全市场行情（东方财富）— 重试最多3次
+    df_spot = None
+    for attempt in range(3):
+        try:
+            df_spot = ak.stock_zh_a_spot_em()
+            break
+        except Exception as e:
+            print(f"  ⚠️ 行情拉取尝试 {attempt+1}/3 失败: {e}")
+            if attempt < 2:
+                _time.sleep(3)
+    if df_spot is None:
+        print("  ❌ 行情3次重试全部失败")
         return results
+
+    df_spot = df_spot.rename(columns={
+        "代码": "code", "最新价": "price",
+        "涨跌幅": "pct_spot", "振幅": "amplitude",
+        "量比": "volume_ratio", "今开": "open",
+        "最高": "high", "最低": "low", "昨收": "prev_close",
+        "换手率": "turnover_spot", "市盈率-动态": "pe",
+    })
+    df_spot["code"] = df_spot["code"].astype(str)
 
     # ③ 合并 + 筛选追踪池中的股票
     import pandas as pd
@@ -375,22 +394,31 @@ def run(mode: str = MODE_EXECUTE) -> dict:
     print(f"  💹 获取 {len(prices)} 只实时数据")
 
     if not prices:
-        print("  ❌ 实时数据获取失败（行情API超时），仅输出 tracker 信息")
-        # 构造降级推送：用 tracker 中的历史数据
+        print("  ❌ 实时数据获取失败（行情API超时），仅输出 tracker 摘要")
+        # 构造降级推送：精简每条 tracker 的关键信息
         lines = [f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}", ""]
-        lines.append("⚠️ 实时行情 API 超时，以下为 tracker 昨日数据，仅供参考")
+        lines.append("⚠️ 实时行情 API 超时（已重试3次），以下为 tracker 关键摘要")
         lines.append("")
-        lines.append("━━━ 📊 追踪池候选 ━━━")
-        for p in pending:
+        # 限制总长度：每条最多输出 120 字，最多 5 只
+        for p in pending[:5]:
             code = p["code"]
-            name = p.get("raw", ["?", "?"])[1] if len(p.get("raw", [])) > 1 else "?"
-            status = p["status"][:100]
+            raw = p.get("raw", [])
+            name = raw[1] if len(raw) > 1 else "?"
+            # 提取关键信息：前80字 + 价格/目标
+            status = p["status"]
+            # 只提取状态标记 + 最后一句（目标/止损）
+            short_status = status.replace(" | ", "·")[:100].rstrip("，。.") 
             lines.append(f"• {code} {name}")
-            lines.append(f"  {status}...")
+            lines.append(f"  {short_status}")
             lines.append("")
+        if len(pending) > 5:
+            lines.append(f"  ...等共 {len(pending)} 只")
         body = "\n".join(lines)
-        body += "─" * 20 + "\n"
-        body += f"⏰ {now_str('%H:%M')} | 追踪 {len(pending)}只 | 行情API超时"
+        # 飞书消息上限约 4000 字符，截断保护
+        if len(body) > 3500:
+            body = body[:3500] + "\n\n(消息过长已截断)"
+        body += "\n" + "─" * 20 + "\n"
+        body += f"⏰ {now_str('%H:%M')} | 追踪 {len(pending)}只 | 行情API超时(已重试3次)"
         feishu_send(f"🐉 龙回头 | {now_str('%m/%d %H:%M')}", body)
         return {"mode": mode, "pushed": True, "count": len(pending), "results": []}
 
