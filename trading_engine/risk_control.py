@@ -60,19 +60,41 @@ def detect_pullback(stock: dict) -> dict:
 
     pct_change = (current - prev_close) / prev_close if prev_close else 0
 
+    # ❶ 上影线占比检测（2026-05-26: 用占振幅比替代绝对回落%+低于中点）
+    # 旧: drawdown>3%→+3, below_midpoint→+2 (经常重复触发)
+    # 新: 上影占全日振幅比例 + 阴阳线区分
+    if high > 0 and low > 0 and high > low:
+        shadow_ratio = (high - current) / (high - low)
+        is_yang = current > open_price
+        
+        if shadow_ratio > 0.7:
+            # 上影占振幅 70%+ → 全天几乎单边回落
+            score += WEIGHTS["drawdown_from_high"]  # +3
+            reasons.append(f"上影占振幅{shadow_ratio*100:.0f}%({high:.2f}→{current:.2f})")
+        elif shadow_ratio > 0.5:
+            if not is_yang:
+                score += WEIGHTS["below_midpoint"]  # +2
+                reasons.append(f"上影{shadow_ratio*100:.0f}%+阴线({high:.2f}→{current:.2f})")
+            else:
+                score += 1  # 阳线上影只是获利回吐
+                reasons.append(f"上影{shadow_ratio*100:.0f}%阳线(获利回吐)")
+
+    '''
+    # 旧代码 — 已替换
     # ❶ 从最高点回落超过阈值
     if high > 0:
         drawdown = (high - current) / current
         if drawdown > THRESHOLDS["drawdown_from_high"]:
             score += WEIGHTS["drawdown_from_high"]
             reasons.append(f"从最高 {high:.2f} 回落 {drawdown*100:.1f}%")
-
+    
     # ❷ 现价低于中点
     if high > 0 and low > 0:
         midpoint = (high + low) / 2
         if current < midpoint:
             score += WEIGHTS["below_midpoint"]
             reasons.append(f"现价 {current:.2f} 低于中点 {midpoint:.2f}")
+    '''
 
     # ❸ 大涨后落入开盘价下方
     if pct_change > THRESHOLDS["surge_then_fade"] and current < open_price:
@@ -106,6 +128,8 @@ def detect_pullback(stock: dict) -> dict:
             "pct_change": round(pct_change * 100, 2),
             "turnover": round(turnover * 100, 2),
             "drawdown_from_high": round((high - current) / current * 100, 2) if high > 0 else 0,
+            "shadow_ratio": round((high - current) / (high - low) * 100, 1) if high > 0 and low > 0 and high > low else 0,
+            "close_position": round((current - low) / (high - low) * 100, 1) if high > 0 and low > 0 and high > low else 50,
         }
     }
 
@@ -214,7 +238,7 @@ def run(positions: list = None) -> dict:
         msg = "\n\n".join(lines)
 
     title = f"🛡️ 持仓风控 | {now_str('%H:%M')}"
-    body = msg + "\n\n" + "─" * 20 + "\n"
+    body = msg + "\n\n─" * 20 + "\n"
     body += f"⏰ 风控引擎 {now_str('%H:%M')} | "
     body += f"检测 {len(codes)} 只 | 预警 {sum(1 for a in alerts if a['decision'] != 'hold')} 只"
 
@@ -252,8 +276,8 @@ def _load_holdings_local() -> list:
                     positions.append({
                         "code": parts[0],
                         "name": parts[1],
-                        "cost": float(parts[2]) if parts[2] != "—" else 0.0,
-                        "shares": int(parts[3]) if parts[3] != "—" else 0,
+                        "cost": float(parts[2]),
+                        "shares": int(parts[3]),
                     })
     return positions
 

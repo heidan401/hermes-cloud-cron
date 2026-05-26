@@ -109,12 +109,34 @@ def score_stock(stock: dict) -> dict:
         score += 1
         reasons.append(f"J值={j:.0f}")
 
-    # ➖ 冲高回落
-    if high > 0 and current > 0:
-        drawdown = (high - current) / current
-        if drawdown > 0.05:
-            score += PENALTIES["pullback"]
-            penalties.append(f"冲高回落 {drawdown*100:.1f}%")
+    # ➖ 冲高回落 — 三维判定 (2026-05-26 优化)
+    # 旧: 上影 > 5% 一刀切 → 新: 收盘位置 + 阴阳线 + 主力方向
+    open_price = stock.get("open", current)
+    low_price = stock.get("low", current)
+    if high > 0 and current > 0 and low_price > 0 and high > low_price:
+        range_total = high - low_price
+        close_position = (current - low_price) / range_total  # 现价在日区间位置 0-1
+        shadow_ratio = (high - current) / range_total         # 上影占全日振幅比例
+        is_yang = current > open_price
+        
+        if close_position < 0.3:
+            # 🔴 收在区间下 30%：明确的弱势
+            if not is_yang and shadow_ratio > 0.6:
+                # 阴线 + 上影占振幅 60%+ = 全天单边回落 = 出货
+                score += PENALTIES["pullback"]  # -2
+                penalties.append(f"出货形态(位{close_position*100:.0f}%阴+上影{shadow_ratio*100:.0f}%)")
+            elif inflow > 0:
+                # 弱势但主力在买 → 可能是大盘拖累
+                score -= 1
+                penalties.append(f"弱势(位{close_position*100:.0f}%)但主力流入{inflow:.0f}万")
+            else:
+                score -= 1
+                penalties.append(f"弱势收盘(位{close_position*100:.0f}%)")
+        elif shadow_ratio > 0.7 and not is_yang and inflow <= 0:
+            # 🟡 长上影 + 阴线 + 主力流出 → 减半惩罚
+            score -= 1
+            penalties.append(f"长上影{shadow_ratio*100:.0f}%+主力流出")
+        # close_position >= 0.3 且非上述 → 🟢 正常波动，不罚
 
     # ➖ 高PE
     if pe > 100:
@@ -159,19 +181,11 @@ def scan_candidates() -> list:
         return candidates
 
     print("  📊 拉取全市场实时行情 (东方财富)...")
-    df_spot = None
-    for attempt in range(3):
-        try:
-            df_spot = ak.stock_zh_a_spot_em()
-            print(f"    行情: {len(df_spot)} 只 (尝试 {attempt+1}/3)")
-            break
-        except Exception as e:
-            print(f"    ⚠️ 尝试 {attempt+1}/3 失败: {e}")
-            if attempt < 2:
-                import time
-                time.sleep(5)
-    if df_spot is None:
-        print("  ❌ 行情拉取 3 次均失败，跳过扫描")
+    try:
+        df_spot = ak.stock_zh_a_spot_em()
+        print(f"    行情: {len(df_spot)} 只")
+    except Exception as e:
+        print(f"  ❌ 行情拉取失败: {e}")
         return candidates
 
     # ─── 合并数据 ───
@@ -251,6 +265,8 @@ def scan_candidates() -> list:
             "name": name,
             "current": price,
             "high": float(row.get("high", price)),
+            "low": float(row.get("low", price)),
+            "open": float(row.get("open", price)),
             "pct_change": pct_change,
             "turnover_rate": turnover_rate,
             "volume_ratio": float(row.get("volume_ratio", 1.0)),
@@ -282,11 +298,7 @@ def run() -> dict:
     print(f"  🎯 候选 {len(candidates)} 只")
 
     if not candidates:
-        # 区分：API 失败 vs 真无候选
-        if not HAS_AK:
-            msg = "❌ akshare 未安装，无法扫描"
-        else:
-            msg = "📭 今日无通用反转候选（无 ≥6 分推荐）\n⚠️ 可能原因：行情/资金流 API 超时，或市场无符合条件的标的"
+        msg = "📭 今日无通用反转候选（无 ≥6 分推荐）"
         feishu_send(f"🔄 通用反转 | {now_str('%H:%M')}", msg)
         return {"pushed": True, "candidates": [], "count": 0}
 
