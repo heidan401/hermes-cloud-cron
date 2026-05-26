@@ -1,0 +1,5 @@
+=== 诊断 05/26 10:34:31 ===
+FEISHU_APP_ID: ✅ 已设置
+FEISHU_APP_SECRET: ✅ 已设置
+FEISHU_CHAT_ID: ✅ 已设置
+DASHSCOPE_API_KEY: ✅ 已设置
