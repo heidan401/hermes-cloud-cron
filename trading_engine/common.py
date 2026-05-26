@@ -85,7 +85,12 @@ def feishu_send(title: str, body: str, app_id: str = None, app_secret: str = Non
                                              "Content-Type": "application/json",
                                              "Authorization": f"Bearer {token}"
                                          })
-        msg_resp = json.loads(urllib.request.urlopen(msg_req).read())
+        try:
+            msg_resp_raw = urllib.request.urlopen(msg_req).read()
+            msg_resp = json.loads(msg_resp_raw)
+        except urllib.error.HTTPError as he:
+            err_body = he.read().decode()
+            return {"success": False, "error": f"HTTP {he.code}: {err_body}"}
         msg_id = msg_resp.get("data", {}).get("message_id")
 
         return {"success": True, "message_id": msg_id}

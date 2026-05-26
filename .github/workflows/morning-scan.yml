@@ -64,7 +64,7 @@ jobs:
             echo "EXIT_CODE: $EXIT_CODE"
             echo "FEISHU_APP_ID: $([ -n \"$FEISHU_APP_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
             echo "FEISHU_APP_SECRET: $([ -n \"$FEISHU_APP_SECRET\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
-            echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+            echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置 (前缀: '${FEISHU_CHAT_ID:0:4}...)' || echo '❌ 未设置')"
             echo "DASHSCOPE_API_KEY: $([ -n \"$DASHSCOPE_API_KEY\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
             echo ""
             echo "=== 引擎输出 ==="
