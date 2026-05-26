@@ -192,8 +192,11 @@ def analyze_snapshot(stocks: list) -> list:
     return snapshots
 
 
-def analyze_execute(stocks: list) -> list:
-    """10:15 执行指令 — 分歧低吸判断，对比 09:35 快照看流入变化"""
+def analyze_execute(stocks: list) -> dict:
+    """10:15 执行指令 — Day 2 完整回访分析。
+    
+    返回结构化数据用于构造丰富推送。
+    """
     # 加载 09:35 快照
     snapshot_data = {}
     if os.path.exists(SNAPSHOT_FILE):
@@ -201,56 +204,139 @@ def analyze_execute(stocks: list) -> list:
             for snap in json.load(f):
                 snapshot_data[snap["code"]] = snap
 
-    instructions = []
-
+    results = []
+    limit_up_count = 0
+    
     for s in stocks:
-        div = s["divergence"]
-        snap = snapshot_data.get(s["code"], {})
-        snap_inflow = snap.get("main_inflow", s["main_inflow"])
-        inflow_delta = s["main_inflow"] - snap_inflow
-        delta_str = f" | 较09:35 {'+' if inflow_delta >= 0 else ''}{inflow_delta:.0f}万" if snap else ""
-
-        instr = {
-            "code": s["code"],
-            "name": s["name"],
-            "price": s["price"],
-            "pct": s["pct"],
-            "main_inflow": s["main_inflow"],
-            "inflow_delta": round(inflow_delta, 0),
-            "divergence": div,
-            "action": "等待",
-            "reason": "",
-        }
-
-        if div == "buy_dip":
-            # 最佳低吸：深跌 + 主力仍在进
-            support = round(s["price"] * 0.97, 2)  # 支撑位：现价 -3%
-            instr["action"] = "🎯 买入"
-            instr["reason"] = (
-                f"分歧低吸信号：跌 {s['pct']}% 但主力仍流入 {s['main_inflow']}万{delta_str}\n"
-                f"支撑位: {support} 元 | 止损: {round(support * 0.95, 2)} 元\n"
-                f"买入价: {s['price']} | 仓位: 100股({s['price']*100:.0f}元)"
-            )
-        elif div == "weak_buy":
-            # 条件稍弱，提示关注
-            instr["action"] = "👀 关注"
-            instr["reason"] = f"小跌 {s['pct']}% + 主力微进 {s['main_inflow']}万{delta_str}，等待更大跌幅或尾盘确认"
-        elif div == "sell_surge":
-            instr["action"] = "🚫 放弃"
-            instr["reason"] = f"大涨 {s['pct']}% 但主力流出 {s['main_inflow']}万{delta_str}，诱多嫌疑"
-        elif div == "abandon":
-            instr["action"] = "💀 放弃"
-            instr["reason"] = f"暴跌 {s['pct']}%，逻辑失效"
-        elif div == "strong":
-            instr["action"] = "🔥 强势"
-            instr["reason"] = f"主力强势回封 {s['main_inflow']}万{delta_str}，可轻仓追涨"
+        code = s["code"]
+        name = s["name"]
+        price = s["price"]
+        pct = s["pct"]
+        net_flow = s["main_inflow"]
+        turnover = s["turnover"]
+        vol_ratio = s["volume_ratio"]
+        high = s["high"]
+        low = s["low"]
+        open_p = s["open"]
+        prev = s["prev_close"]
+        amplitude = s["amplitude"]
+        
+        snap = snapshot_data.get(code, {})
+        snap_inflow = snap.get("main_inflow", net_flow)
+        inflow_delta = net_flow - snap_inflow
+        
+        # ─── 涨停检测 ───
+        limit_up_price = round(prev * 1.10, 2)  # 10% 涨停价
+        is_limit_up = abs(price - limit_up_price) < 0.02 and pct > 9.0
+        if is_limit_up:
+            limit_up_count += 1
+        
+        # ─── 涨停开板检测 ───
+        opened_high = high > limit_up_price * 1.005 if is_limit_up else False
+        drawdown_from_high = round((high - price) / high * 100, 2) if high > price else 0
+        
+        # ─── 判定 ───
+        action = ""
+        action_icon = ""
+        analysis = []
+        
+        if is_limit_up:
+            # 涨停中的细分判断
+            if turnover < 2.0 and net_flow > 3000:
+                action = "🔥 强势封板"
+                action_icon = "🔥"
+                analysis.append("涨停封死+缩量锁仓，筹码稳定")
+            elif turnover < 3.0 and net_flow > 1000:
+                action = "✅ 稳定封板"
+                action_icon = "✅"
+                analysis.append("涨停封死，主力续流入")
+            elif opened_high and drawdown_from_high > 1.5:
+                action = "⚠️ 涨停开板"
+                action_icon = "⚠️"
+                analysis.append(f"涨停打开！从{high:.2f}回落至{price:.2f}(-{drawdown_from_high}%)")
+                if net_flow < 0:
+                    analysis.append("主力同步流出，危险信号")
+            elif turnover > 10:
+                action = "⚠️ 巨量分歧"
+                action_icon = "⚠️"
+                analysis.append(f"换手{turnover}%巨量，多空分歧激烈")
+            else:
+                action = "🔴 涨停封板"
+                action_icon = "🔴"
+                analysis.append("涨停封死")
+            
+            # 今日不买（涨停无法介入）
+            instruction = "⏳ 今日不买，等回踩"
+            buy_zone = "待回踩确认"
+            
+        elif pct < -3 and net_flow > 500:
+            action = "🎯 分歧低吸"
+            action_icon = "🎯"
+            instruction = f"买入 100股 ≈ {price*100:.0f}元"
+            support = round(price * 0.97, 2)
+            buy_zone = f"{support}-{price:.2f}"
+            analysis.append(f"跌{pct}%但主力仍进{net_flow}万，分歧低吸机会")
+            
+        elif pct < -1 and net_flow > 0:
+            action = "👀 微跌关注"
+            action_icon = "👀"
+            instruction = "观察等尾盘"
+            buy_zone = f"{round(price*0.98,2)}-{price:.2f}"
+            analysis.append(f"小跌{pct}%+主力微进{net_flow}万")
+            
+        elif pct > 3 and net_flow < -1000:
+            action = "🚫 诱多出货"
+            action_icon = "🚫"
+            instruction = "放弃，不参与"
+            buy_zone = "—"
+            analysis.append(f"涨{pct}%但主力流出{net_flow}万，诱多嫌疑")
+            
+        elif net_flow > 5000 and pct > 5:
+            action = "🔥 强势连板"
+            action_icon = "🔥"
+            instruction = "涨停不追，等分歧"
+            buy_zone = "待回踩"
+            analysis.append(f"主力{net_flow}万强势流入，连板中")
+            
         else:
-            instr["action"] = "⏳ 等待"
-            instr["reason"] = f"信号不明确，换手 {s['turnover']}%，量比 {s['volume_ratio']}{delta_str}"
+            action = "⏳ 中性观望"
+            action_icon = "⏳"
+            instruction = "信号不明，继续观察"
+            buy_zone = "—"
+            analysis.append(f"换手{turnover}% 量比{vol_ratio} 信号不明确")
 
-        instructions.append(instr)
+        results.append({
+            "code": code,
+            "name": name,
+            "price": price,
+            "pct": pct,
+            "turnover": turnover,
+            "vol_ratio": vol_ratio,
+            "main_inflow": net_flow,
+            "inflow_delta": round(inflow_delta, 0),
+            "high": high,
+            "low": low,
+            "open": open_p,
+            "prev": prev,
+            "amplitude": amplitude,
+            "is_limit_up": is_limit_up,
+            "limit_up_price": limit_up_price,
+            "drawdown_from_high": drawdown_from_high,
+            "action": action,
+            "action_icon": action_icon,
+            "instruction": instruction,
+            "buy_zone": buy_zone,
+            "analysis": analysis,
+            "snap": snap,
+        })
 
-    return instructions
+    return {
+        "results": results,
+        "limit_up_count": limit_up_count,
+        "total": len(results),
+        "buy_count": sum(1 for r in results if "买入" in r["instruction"]),
+        "watch_count": sum(1 for r in results if "关注" in r["action"] or "观察" in r["action"]),
+    }
 
 
 def run(mode: str = MODE_EXECUTE) -> dict:
@@ -283,36 +369,94 @@ def run(mode: str = MODE_EXECUTE) -> dict:
         return {"mode": mode, "pushed": False, "count": len(snapshots), "results": snapshots}
 
     elif mode == MODE_EXECUTE:
-        instructions = analyze_execute(prices)
-        buy_signals = [i for i in instructions if "买入" in i["action"]]
-        watch_signals = [i for i in instructions if "关注" in i["action"]]
-
-        # 构造推送
+        analysis = analyze_execute(prices)
+        results = analysis["results"]
+        
+        # ─── 构造丰富推送 ───
         lines = []
-        for inst in instructions:
-            lines.append(f"{inst['action']} **{inst['name']}**({inst['code']}) {inst['price']:.2f}元")
-            lines.append(f"   {inst['reason']}")
+        
+        # §1 标题
+        lines.append(f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}")
+        lines.append("")
+        
+        # §2 Day 2 回访 — 每只候选的实时数据+判定
+        lines.append("━━━ 📊 Day 2 回访 ━━━")
+        for r in results:
+            pct_sign = "+" if r["pct"] >= 0 else ""
+            flow_str = f"{r['main_inflow']/10000:.2f}亿" if abs(r['main_inflow']) >= 10000 else f"{r['main_inflow']:.0f}万"
+            delta_str = ""
+            if r["snap"]:
+                d = r["inflow_delta"]
+                delta_str = f" | 较09:35 {'+' if d>=0 else ''}{d:.0f}万"
+            
+            lines.append(f"• {r['action_icon']} **{r['name']}**({r['code']}) {r['price']:.2f} {pct_sign}{r['pct']:.2f}%")
+            lines.append(f"  主力{flow_str} | 换手{r['turnover']:.1f}% | 量比{r['vol_ratio']:.2f}{delta_str}")
+            if r["drawdown_from_high"] > 0.5:
+                lines.append(f"  最高{r['high']:.2f}→现{r['price']:.2f}(上影{r['drawdown_from_high']:.1f}%)")
+            for a in r["analysis"]:
+                lines.append(f"  → {a}")
+            lines.append(f"  判断: {r['action']} | {r['instruction']}")
             lines.append("")
-
-        body = "\n".join(lines) if lines else "📭 今日无明确的龙回头执行信号"
+        
+        # §3 今日指令汇总
+        lines.append("━━━ 🎯 今日指令 ━━━")
+        buy_list = [r for r in results if "买入" in r["instruction"]]
+        watch_list = [r for r in results if "关注" in r["action"] or "观察" in r["action"]]
+        wait_list = [r for r in results if "不买" in r["instruction"] or "观望" in r["action"] or "不明" in r["instruction"]]
+        
+        if buy_list:
+            for r in buy_list:
+                lines.append(f"🎯 买入 **{r['name']}**({r['code']}) → {r['instruction']}")
+                lines.append(f"   区间: {r['buy_zone']} | 现价: {r['price']:.2f}")
+        else:
+            lines.append("买入 0 只")
+        
+        if watch_list:
+            for r in watch_list:
+                lines.append(f"👀 关注 **{r['name']}**({r['code']}) → {r['instruction']}")
+        if wait_list:
+            names = "、".join([r['name'] for r in wait_list])
+            lines.append(f"⏳ 等待: {names}（{'全涨停封死' if analysis['limit_up_count'] >= len(wait_list) else '信号不明'}，无分歧低吸窗口）")
+        
+        lines.append("")
+        
+        # §4 明日关注
+        lines.append("━━━ 📅 明日关注 ━━━")
+        tomorrow = (datetime.now(TZ) + timedelta(days=1))
+        for r in results:
+            if r["is_limit_up"]:
+                target_high = round(r["price"] * 1.05, 2)
+                dip_zone = f"{round(r['price'] * 0.92, 2)}-{round(r['price'] * 0.95, 2)}"
+                lines.append(f"• {r['name']}({r['code']}) 今日涨停 {r['price']:.2f}")
+                lines.append(f"  明日若回踩 {dip_zone} + 主力续流入 → 尾盘可考虑")
+                lines.append(f"  目标: {target_high} | 100股 ≈ {r['price']*100:.0f}元")
+            elif "买入" in r["instruction"]:
+                lines.append(f"• {r['name']}({r['code']}) {r['instruction']}")
+                lines.append(f"  区间: {r['buy_zone']}")
+        
+        lines.append("")
+        body = "\n".join(lines)
         body += "─" * 20 + "\n"
         body += f"⏰ 龙回头执行引擎 {now_str('%H:%M')} | "
-        body += f"追踪 {len(pending)} 只 | 买入 {len(buy_signals)} | 关注 {len(watch_signals)}"
+        body += f"追踪 {analysis['total']}只 | 涨停 {analysis['limit_up_count']}只 | "
+        body += f"买入 {analysis['buy_count']} | 关注 {analysis['watch_count']}"
 
         title = f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}"
         result = feishu_send(title, body)
         pushed = result.get("success", False)
 
         # 有买入信号时额外推送
-        for inst in buy_signals:
+        buy_results = [r for r in results if "买入" in r["instruction"]]
+        for r in buy_results:
             feishu_send(
                 "🎯 龙回头买入信号",
-                f"{inst['name']}({inst['code']})\n{inst['reason']}"
+                f"{r['name']}({r['code']})\n{r['analysis'][0]}\n区间: {r['buy_zone']} | 现价: {r['price']:.2f}"
             )
 
-        print(f"  📤 推送 {'✅' if pushed else '❌'} | 买入 {len(buy_signals)} | 关注 {len(watch_signals)}")
-        return {"mode": mode, "pushed": pushed, "count": len(instructions),
-                "buy": len(buy_signals), "watch": len(watch_signals), "results": instructions}
+        print(f"  📤 推送 {'✅' if pushed else '❌'} | 买入 {analysis['buy_count']} | 关注 {analysis['watch_count']}")
+        return {"mode": mode, "pushed": pushed, "count": analysis['total'],
+                "buy": analysis['buy_count'], "watch": analysis['watch_count'],
+                "limit_up": analysis['limit_up_count'], "results": results}
 
     elif mode == MODE_CLOSE:
         # 14:30 尾盘扫描 — 第二次机会
