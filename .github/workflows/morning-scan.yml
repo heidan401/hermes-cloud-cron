@@ -56,13 +56,20 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
         run: |
-          python trading_engine/engine_runner.py 09:00
+          python trading_engine/engine_runner.py 09:00 2>&1 | tee /tmp/engine_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
           # 诊断输出
-          echo "=== 诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ===" > /tmp/diag.txt
-          echo "FEISHU_APP_ID: $([ -n \"$FEISHU_APP_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
-          echo "FEISHU_APP_SECRET: $([ -n \"$FEISHU_APP_SECRET\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
-          echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
-          echo "DASHSCOPE_API_KEY: $([ -n \"$DASHSCOPE_API_KEY\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
+          {
+            echo "=== 诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ==="
+            echo "EXIT_CODE: $EXIT_CODE"
+            echo "FEISHU_APP_ID: $([ -n \"$FEISHU_APP_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+            echo "FEISHU_APP_SECRET: $([ -n \"$FEISHU_APP_SECRET\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+            echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+            echo "DASHSCOPE_API_KEY: $([ -n \"$DASHSCOPE_API_KEY\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+            echo ""
+            echo "=== 引擎输出 ==="
+            cat /tmp/engine_output.txt
+          } > /tmp/diag.txt
           cat /tmp/diag.txt
       
       - name: 📋 提交诊断日志
