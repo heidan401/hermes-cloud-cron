@@ -8,6 +8,7 @@ on:
     - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
     - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
     - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
+  push:  # 临时验证飞书通知链路（验证后移除）
   workflow_dispatch:  # 手动触发
 
 jobs:
@@ -36,11 +37,16 @@ jobs:
       - name: 识别时点
         id: slot
         run: |
-          HOUR=$(TZ='Asia/Shanghai' date +%H)
-          MIN=$(TZ='Asia/Shanghai' date +%M)
-          SLOT="${HOUR}:${MIN}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SLOT="09:00"  # push 测试→直接跑早报
+            echo "🧪 测试模式: 强制执行 09:00 隔夜早报"
+          else
+            HOUR=$(TZ='Asia/Shanghai' date +%H)
+            MIN=$(TZ='Asia/Shanghai' date +%M)
+            SLOT="${HOUR}:${MIN}"
+            echo "当前北京时间: $SLOT"
+          fi
           echo "slot=$SLOT" >> $GITHUB_OUTPUT
-          echo "当前北京时间: $SLOT"
       
       - name: 🕘 09:00 隔夜早报
         if: steps.slot.outputs.slot == '09:00'
