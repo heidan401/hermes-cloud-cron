@@ -134,6 +134,14 @@ def detect_pullback(stock: dict) -> dict:
     }
 
 
+def _safe_float(val, default=0.0):
+    """安全 float 转换：处理 akshare 返回的 '—' 等非数字占位符"""
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 def fetch_position_prices(codes: List[str]) -> List[dict]:
     """获取持仓股的实时数据（单次全市场拉取）"""
     results = []
@@ -147,15 +155,18 @@ def fetch_position_prices(codes: List[str]) -> List[dict]:
             code = str(r["代码"])
             if code not in code_set:
                 continue
+            current = _safe_float(r.get("最新价"))
+            if current <= 0:
+                continue  # 停牌或无数据，跳过
             results.append({
                 "code": code,
-                "name": r["名称"],
-                "current": float(r["最新价"]),
-                "open": float(r["今开"]),
-                "high": float(r["最高"]),
-                "low": float(r["最低"]),
-                "turnover_rate": float(r.get("换手率", 0)) / 100.0,
-                "prev_close": float(r["昨收"]),
+                "name": r.get("名称", "?"),
+                "current": current,
+                "open": _safe_float(r.get("今开"), current),
+                "high": _safe_float(r.get("最高"), current),
+                "low": _safe_float(r.get("最低"), current),
+                "turnover_rate": _safe_float(r.get("换手率"), 0) / 100.0,
+                "prev_close": _safe_float(r.get("昨收"), 1),
             })
     except Exception as e:
         print(f"  ⚠️ 行情拉取失败: {e}")
@@ -276,8 +287,8 @@ def _load_holdings_local() -> list:
                     positions.append({
                         "code": parts[0],
                         "name": parts[1],
-                        "cost": float(parts[2]),
-                        "shares": int(parts[3]),
+                        "cost": _safe_float(parts[2]),
+                        "shares": int(_safe_float(parts[3], 100)),
                     })
     return positions
 
