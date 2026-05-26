@@ -72,8 +72,8 @@ def feishu_send(title: str, body: str, app_id: str = None, app_secret: str = Non
             ]
         }
 
-        msg_url = "https://open.feishu.cn/open-apis/im/v1/messages"
-        params = {"receive_id_type": "chat_id"}
+        # 修复：receive_id_type 必须作为 query param 传入 URL
+        msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
         msg_data = {
             "receive_id": chat_id,
             "msg_type": "interactive",
