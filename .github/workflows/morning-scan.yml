@@ -8,82 +8,57 @@ on:
     - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
     - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
     - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
-  push:
-    branches: [test-*]  # 仅测试分支触发，避免死循环
   workflow_dispatch:  # 手动触发
 
 jobs:
   engine:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     permissions:
-      contents: write
+      contents: write  # 允许 git push 快照文件
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PYTHONPATH: ${{ github.workspace }}
     
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-      
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      
-      - name: 安装依赖
-        run: |
-          pip install akshare requests
+      - run: pip install akshare requests
       
       - name: 识别时点
         id: slot
         run: |
-          if [ "${{ github.ref_name }}" = "test-all" ]; then
-            SLOT="test_all"
-            echo "🧪 全链路测试模式 (test-all 分支)"
-          else
-            HOUR=$(TZ='Asia/Shanghai' date +%H)
-            MIN=$(TZ='Asia/Shanghai' date +%M)
-            SLOT="${HOUR}:${MIN}"
-            echo "当前北京时间: $SLOT"
-          fi
+          HOUR=$(TZ='Asia/Shanghai' date +%H)
+          MIN=$(TZ='Asia/Shanghai' date +%M)
+          SLOT="${HOUR}:${MIN}"
           echo "slot=$SLOT" >> $GITHUB_OUTPUT
+          echo "当前北京时间: $SLOT"
       
       - name: 🕘 09:00 隔夜早报
-        id: step_0900
-        if: steps.slot.outputs.slot == '09:00' || steps.slot.outputs.slot == 'test_all'
-        continue-on-error: true
+        if: steps.slot.outputs.slot == '09:00'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: |
-          python trading_engine/engine_runner.py 09:00 2>&1 | tee /tmp/out_0900.txt
-          echo "EXIT_0900=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        run: python trading_engine/engine_runner.py 09:00
       
       - name: 🛡️ 09:30 持仓风控
-        id: step_0930
-        if: steps.slot.outputs.slot == '09:30' || steps.slot.outputs.slot == 'test_all'
-        continue-on-error: true
+        if: steps.slot.outputs.slot == '09:30'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: |
-          python trading_engine/engine_runner.py 09:30 2>&1 | tee /tmp/out_0930.txt
-          echo "EXIT_0930=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        run: python trading_engine/engine_runner.py 09:30
       
       - name: 📸 09:35 龙回头快照
-        id: step_0935
-        if: steps.slot.outputs.slot == '09:35' || steps.slot.outputs.slot == 'test_all'
-        continue-on-error: true
-        run: |
-          python trading_engine/engine_runner.py 09:35 2>&1 | tee /tmp/out_0935.txt
-          echo "EXIT_0935=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        if: steps.slot.outputs.slot == '09:35'
+        run: python trading_engine/engine_runner.py 09:35
 
       - name: 📤 推送快照到仓库
-        if: (steps.slot.outputs.slot == '09:35' || steps.slot.outputs.slot == 'test_all') && steps.step_0935.outcome == 'success'
+        if: steps.slot.outputs.slot == '09:35'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -92,42 +67,19 @@ jobs:
           git push
       
       - name: 🔄 10:00 通用反转
-        id: step_1000
-        if: steps.slot.outputs.slot == '10:00' || steps.slot.outputs.slot == 'test_all'
-        continue-on-error: true
+        if: steps.slot.outputs.slot == '10:00'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: |
-          python trading_engine/engine_runner.py 10:00 2>&1 | tee /tmp/out_1000.txt
-          echo "EXIT_1000=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        run: python trading_engine/engine_runner.py 10:00
       
       - name: 🐉 10:15 龙回头执行
-        id: step_1015
-        if: steps.slot.outputs.slot == '10:15' || steps.slot.outputs.slot == 'test_all'
-        continue-on-error: true
+        if: steps.slot.outputs.slot == '10:15'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
         run: |
           git pull origin main 2>/dev/null || true
-          python trading_engine/engine_runner.py 10:15 2>&1 | tee /tmp/out_1015.txt
-          echo "EXIT_1015=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-
-      - name: 📋 生成诊断报告
-        if: steps.slot.outputs.slot == 'test_all'
-        run: |
-          {
-            echo "=== 全链路诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ==="
-            for slot in 0900 0930 0935 1000 1015; do
-              echo ""
-              echo "--- $slot ---"
-              echo "EXIT: $(eval echo \${{ steps.step_${slot}.outputs.EXIT_${slot} }})"
-              echo "OUTCOME: $(eval echo \${{ steps.step_${slot}.outcome }})"
-              echo ""
-              cat /tmp/out_${slot}.txt 2>/dev/null | tail -10
-            done
-          } > /tmp/diag.txt
-          cat /tmp/diag.txt
+          python trading_engine/engine_runner.py 10:15

@@ -252,8 +252,8 @@ def _load_holdings_local() -> list:
                     positions.append({
                         "code": parts[0],
                         "name": parts[1],
-                        "cost": float(parts[2]),
-                        "shares": int(parts[3]),
+                        "cost": float(parts[2]) if parts[2] != "—" else 0.0,
+                        "shares": int(parts[3]) if parts[3] != "—" else 0,
                     })
     return positions
 
