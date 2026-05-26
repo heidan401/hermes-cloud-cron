@@ -159,11 +159,19 @@ def scan_candidates() -> list:
         return candidates
 
     print("  📊 拉取全市场实时行情 (东方财富)...")
-    try:
-        df_spot = ak.stock_zh_a_spot_em()
-        print(f"    行情: {len(df_spot)} 只")
-    except Exception as e:
-        print(f"  ❌ 行情拉取失败: {e}")
+    df_spot = None
+    for attempt in range(3):
+        try:
+            df_spot = ak.stock_zh_a_spot_em()
+            print(f"    行情: {len(df_spot)} 只 (尝试 {attempt+1}/3)")
+            break
+        except Exception as e:
+            print(f"    ⚠️ 尝试 {attempt+1}/3 失败: {e}")
+            if attempt < 2:
+                import time
+                time.sleep(5)
+    if df_spot is None:
+        print("  ❌ 行情拉取 3 次均失败，跳过扫描")
         return candidates
 
     # ─── 合并数据 ───
@@ -274,7 +282,11 @@ def run() -> dict:
     print(f"  🎯 候选 {len(candidates)} 只")
 
     if not candidates:
-        msg = "📭 今日无通用反转候选（无 ≥6 分推荐）"
+        # 区分：API 失败 vs 真无候选
+        if not HAS_AK:
+            msg = "❌ akshare 未安装，无法扫描"
+        else:
+            msg = "📭 今日无通用反转候选（无 ≥6 分推荐）\n⚠️ 可能原因：行情/资金流 API 超时，或市场无符合条件的标的"
         feishu_send(f"🔄 通用反转 | {now_str('%H:%M')}", msg)
         return {"pushed": True, "candidates": [], "count": 0}
 

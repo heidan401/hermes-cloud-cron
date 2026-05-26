@@ -214,7 +214,7 @@ def run(positions: list = None) -> dict:
         msg = "\n\n".join(lines)
 
     title = f"🛡️ 持仓风控 | {now_str('%H:%M')}"
-    body = msg + "\n\n─" * 20 + "\n"
+    body = msg + "\n\n" + "─" * 20 + "\n"
     body += f"⏰ 风控引擎 {now_str('%H:%M')} | "
     body += f"检测 {len(codes)} 只 | 预警 {sum(1 for a in alerts if a['decision'] != 'hold')} 只"
 
