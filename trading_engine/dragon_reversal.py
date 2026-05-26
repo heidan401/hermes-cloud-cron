@@ -355,12 +355,44 @@ def run(mode: str = MODE_EXECUTE) -> dict:
     print(f"  📋 追踪池: {len(pending)} 只待观察")
 
     if not pending:
+        # 诊断: 文件存在但没解析到?
+        print(f"  🔍 tracker 存在: {os.path.exists(TRACKER_FILE)}")
+        if os.path.exists(TRACKER_FILE):
+            with open(TRACKER_FILE) as f:
+                first_50 = f.read()[:500]
+            print(f"  📄 文件前500字: {first_50}")
         print("  📭 无待观察标的")
-        return {"mode": mode, "pushed": False, "count": 0, "results": []}
+        feishu_send(
+            f"🐉 龙回头 | {now_str('%H:%M')}",
+            f"📭 追踪池为空\n"
+            f"tracker 存在: {os.path.exists(TRACKER_FILE)}\n"
+            f"文件大小: {os.path.getsize(TRACKER_FILE) if os.path.exists(TRACKER_FILE) else 0} 字节"
+        )
+        return {"mode": mode, "pushed": True, "count": 0, "results": []}
 
     codes = [p["code"] for p in pending]
     prices = fetch_dragon_prices(codes)
     print(f"  💹 获取 {len(prices)} 只实时数据")
+
+    if not prices:
+        print("  ❌ 实时数据获取失败（行情API超时），仅输出 tracker 信息")
+        # 构造降级推送：用 tracker 中的历史数据
+        lines = [f"🐉 龙回头执行指令 | {now_str('%m/%d %H:%M')}", ""]
+        lines.append("⚠️ 实时行情 API 超时，以下为 tracker 昨日数据，仅供参考")
+        lines.append("")
+        lines.append("━━━ 📊 追踪池候选 ━━━")
+        for p in pending:
+            code = p["code"]
+            name = p.get("raw", ["?", "?"])[1] if len(p.get("raw", [])) > 1 else "?"
+            status = p["status"][:100]
+            lines.append(f"• {code} {name}")
+            lines.append(f"  {status}...")
+            lines.append("")
+        body = "\n".join(lines)
+        body += "─" * 20 + "\n"
+        body += f"⏰ {now_str('%H:%M')} | 追踪 {len(pending)}只 | 行情API超时"
+        feishu_send(f"🐉 龙回头 | {now_str('%m/%d %H:%M')}", body)
+        return {"mode": mode, "pushed": True, "count": len(pending), "results": []}
 
     if mode == MODE_SNAPSHOT:
         # 静默快照，不推送
