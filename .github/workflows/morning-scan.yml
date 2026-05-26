@@ -55,7 +55,25 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: python trading_engine/engine_runner.py 09:00
+        run: |
+          python trading_engine/engine_runner.py 09:00
+          # 诊断输出
+          echo "=== 诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ===" > /tmp/diag.txt
+          echo "FEISHU_APP_ID: $([ -n \"$FEISHU_APP_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
+          echo "FEISHU_APP_SECRET: $([ -n \"$FEISHU_APP_SECRET\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
+          echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
+          echo "DASHSCOPE_API_KEY: $([ -n \"$DASHSCOPE_API_KEY\" ] && echo '✅ 已设置' || echo '❌ 未设置')" >> /tmp/diag.txt
+          cat /tmp/diag.txt
+      
+      - name: 📋 提交诊断日志
+        if: steps.slot.outputs.slot == '09:00'
+        run: |
+          cp /tmp/diag.txt diagnostic.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add diagnostic.txt
+          git diff --staged --quiet || git commit -m "📋 诊断 $(TZ='Asia/Shanghai' date +%m/%d_%H%M)"
+          git push
       
       - name: 🛡️ 09:30 持仓风控
         if: steps.slot.outputs.slot == '09:30'
