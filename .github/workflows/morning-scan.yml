@@ -8,7 +8,6 @@ on:
     - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
     - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
     - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
-  push:  # 临时验证飞书通知链路（验证后移除）
   workflow_dispatch:  # 手动触发
 
 jobs:
@@ -37,16 +36,11 @@ jobs:
       - name: 识别时点
         id: slot
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            SLOT="09:00"  # push 测试→直接跑早报
-            echo "🧪 测试模式: 强制执行 09:00 隔夜早报"
-          else
-            HOUR=$(TZ='Asia/Shanghai' date +%H)
-            MIN=$(TZ='Asia/Shanghai' date +%M)
-            SLOT="${HOUR}:${MIN}"
-            echo "当前北京时间: $SLOT"
-          fi
+          HOUR=$(TZ='Asia/Shanghai' date +%H)
+          MIN=$(TZ='Asia/Shanghai' date +%M)
+          SLOT="${HOUR}:${MIN}"
           echo "slot=$SLOT" >> $GITHUB_OUTPUT
+          echo "当前北京时间: $SLOT"
       
       - name: 🕘 09:00 隔夜早报
         if: steps.slot.outputs.slot == '09:00'
@@ -55,32 +49,7 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        run: |
-          python trading_engine/engine_runner.py 09:00 2>&1 | tee /tmp/engine_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-          # 诊断输出
-          {
-            echo "=== 诊断 $(TZ='Asia/Shanghai' date +'%m/%d %H:%M:%S') ==="
-            echo "EXIT_CODE: $EXIT_CODE"
-            echo "FEISHU_APP_ID: $([ -n \"$FEISHU_APP_ID\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
-            echo "FEISHU_APP_SECRET: $([ -n \"$FEISHU_APP_SECRET\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
-            echo "FEISHU_CHAT_ID: $([ -n \"$FEISHU_CHAT_ID\" ] && echo '✅ 已设置 (前缀: '${FEISHU_CHAT_ID:0:4}...)' || echo '❌ 未设置')"
-            echo "DASHSCOPE_API_KEY: $([ -n \"$DASHSCOPE_API_KEY\" ] && echo '✅ 已设置' || echo '❌ 未设置')"
-            echo ""
-            echo "=== 引擎输出 ==="
-            cat /tmp/engine_output.txt
-          } > /tmp/diag.txt
-          cat /tmp/diag.txt
-      
-      - name: 📋 提交诊断日志
-        if: steps.slot.outputs.slot == '09:00'
-        run: |
-          cp /tmp/diag.txt diagnostic.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add diagnostic.txt
-          git diff --staged --quiet || git commit -m "📋 诊断 $(TZ='Asia/Shanghai' date +%m/%d_%H%M)"
-          git push
+        run: python trading_engine/engine_runner.py 09:00
       
       - name: 🛡️ 09:30 持仓风控
         if: steps.slot.outputs.slot == '09:30'
@@ -120,5 +89,3 @@ jobs:
         run: |
           git pull origin main 2>/dev/null || true
           python trading_engine/engine_runner.py 10:15
-      
-      
