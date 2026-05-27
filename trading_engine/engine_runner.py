@@ -123,7 +123,8 @@ def run_close_report() -> dict:
                 if attempt < 2:
                     _time.sleep(5)
 
-    # ─── 3. 龙回头 14:30 扫描结果读取 ───
+    # ─── 3. 龙回头 14:30 参考 + 🆕 15:00 独立扫描 ───
+    # 3a. 读取 14:30 尾盘结果（作为参考基线）
     try:
         longhu_dir = os.path.join(_talent_dir, "龙回头")
         patterns = [os.path.join(longhu_dir, f"{datetime.now(TZ).strftime('%Y%m%d')}*尾盘*.md"),
@@ -132,11 +133,17 @@ def run_close_report() -> dict:
             files = sorted(_glob.glob(pat))
             if files:
                 with open(files[-1]) as f:
-                    content = f.read()
-                    result["dragon_summary"] = content[:800] if len(content) > 800 else content
+                    result["dragon_1430_ref"] = f.read()[:500]
                 break
     except Exception:
         pass
+    
+    # 3b. 🆕 15:00 独立 Day 1 扫描（最后半小时可能出新的反转信号）
+    try:
+        fresh = run_dragon_close()
+        result["dragon_1500_scan"] = fresh
+    except Exception as e:
+        result["dragon_1500_scan"] = {"error": str(e)}
 
     # ─── 4. 持仓汇总 ───
     try:
@@ -168,10 +175,20 @@ def run_close_report() -> dict:
         for s in result["cold_sectors"]:
             md += f"• {s['name']}: {s['pct']:+.2f}%\n"
     
-    if result["dragon_summary"]:
-        md += f"\n## 🐉 龙回头尾盘\n{result['dragon_summary']}\n"
+    if result.get("dragon_1430_ref"):
+        md += f"\n## 🐉 龙回头 14:30（参考基线）\n{result['dragon_1430_ref']}\n"
+    
+    if result.get("dragon_1500_scan"):
+        scan = result["dragon_1500_scan"]
+        md += "\n## 🆕 龙回头 15:00 独立扫描\n"
+        if isinstance(scan, dict) and scan.get("error"):
+            md += f"⚠️ 扫描异常: {scan['error']}\n"
+        elif isinstance(scan, dict) and scan.get("pushed"):
+            md += f"✅ 已推送飞书 | 结果已合并到上方 14:30 报告\n"
+        else:
+            md += f"```\n{json.dumps(scan, ensure_ascii=False, indent=2)[:1000]}\n```\n"
     else:
-        md += "\n## 🐉 龙回头尾盘\n⚠️ 未找到今日尾盘扫描文件（c123a5614791 可能未执行）\n"
+        md += "\n## 🆕 龙回头 15:00 独立扫描\n⚠️ 未执行（异常跳过）\n"
     
     md += f"\n---\n⏰ 自动生成 {now_str()}\n"
     
@@ -199,6 +216,11 @@ def run_close_report() -> dict:
             lines.append(f"  • {s['name']}: {s['pct']:+.2f}%")
     else:
         lines.append("\n⚠️ 板块数据获取失败（收盘后限流）")
+    
+    # 🆕 15:00 龙回头独立扫描结果摘要
+    if result.get("dragon_1500_scan") and not isinstance(result["dragon_1500_scan"].get("error"), str):
+        lines.append("\n🐉 15:00 龙回头扫描已完成 → 详见完整报告")
+    
     lines.append(f"\n📄 完整报告 → 收盘/{today}_1500_收盘简报.md")
     
     body = "\n".join(lines)
