@@ -65,54 +65,145 @@ def run_dragon_close() -> dict:
 
 
 def run_close_report() -> dict:
-    """15:00 收盘简报 — 尾盘异动 + 明日关注"""
+    """15:00 收盘简报 — 大盘+板块+龙回头+持仓 全量汇总"""
+    import time as _time
+    import subprocess as _sp
+    import glob as _glob
+    
+    # 路径解析（一次定义，全函数复用）
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _talent_dir = os.path.dirname(_repo_root)  # ~/天才交易员
+    
     try:
         import akshare as ak
         HAS_AK = True
     except ImportError:
         HAS_AK = False
 
-    result = {"time": now_str(), "hot_sectors": [], "alerts": []}
+    result = {"time": now_str(), "indices": [], "hot_sectors": [], 
+              "dragon_summary": "", "holdings_summary": ""}
 
-    if not HAS_AK:
-        return result
-
+    # ─── 1. 大盘指数 ───
     try:
-        # 涨幅前5板块
-        df = ak.stock_board_concept_name_em()
-        if df is not None and not df.empty:
-            top5 = df.nlargest(5, "涨跌幅")
-            for _, row in top5.iterrows():
-                result["hot_sectors"].append({
-                    "name": row["板块名称"],
-                    "pct": float(row["涨跌幅"]),
-                })
+        idx_out = _sp.run(["stock", "index"], capture_output=True, text=True, timeout=15)
+        if idx_out.returncode == 0:
+            result["indices"] = idx_out.stdout.strip()
     except Exception:
         pass
 
-    # 写 JSON 到 data/ 供云端第二天读取
-    # 数据目录：engine_runner.py 的上两级 = github-actions-cron 仓库根
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(repo_root, "data")
+    # ─── 2. 板块数据：akshare 三重试 + stock CLI 兜底 ───
+    sectors_fetched = False
+    if HAS_AK:
+        for attempt in range(3):
+            try:
+                df = ak.stock_board_concept_name_em()
+                if df is not None and not df.empty and len(df) > 10:
+                    top5 = df.nlargest(5, "涨跌幅")
+                    bottom5 = df.nsmallest(5, "涨跌幅")
+                    for _, row in top5.iterrows():
+                        result["hot_sectors"].append({
+                            "name": row["板块名称"],
+                            "pct": float(row["涨跌幅"]),
+                        })
+                    result["cold_sectors"] = []
+                    for _, row in bottom5.iterrows():
+                        result["cold_sectors"].append({
+                            "name": row["板块名称"], 
+                            "pct": float(row["涨跌幅"]),
+                        })
+                    sectors_fetched = True
+                    print(f"  ✅ 板块数据: akshare 第{attempt+1}次成功")
+                    break
+                else:
+                    print(f"  ⚠️ akshare 第{attempt+1}次返回空/不足，{'重试...' if attempt < 2 else '放弃'}")
+                    if attempt < 2:
+                        _time.sleep(5)
+            except Exception as e:
+                print(f"  ⚠️ akshare 第{attempt+1}次异常: {e}")
+                if attempt < 2:
+                    _time.sleep(5)
+
+    # ─── 3. 龙回头 14:30 扫描结果读取 ───
+    try:
+        longhu_dir = os.path.join(_talent_dir, "龙回头")
+        patterns = [os.path.join(longhu_dir, f"{datetime.now(TZ).strftime('%Y%m%d')}*尾盘*.md"),
+                     os.path.join(longhu_dir, f"{datetime.now(TZ).strftime('%Y%m%d')}*扫描*.md")]
+        for pat in patterns:
+            files = sorted(_glob.glob(pat))
+            if files:
+                with open(files[-1]) as f:
+                    content = f.read()
+                    result["dragon_summary"] = content[:800] if len(content) > 800 else content
+                break
+    except Exception:
+        pass
+
+    # ─── 4. 持仓汇总 ───
+    try:
+        holdings_path = os.path.join(_talent_dir, "holdings.md")
+        if os.path.exists(holdings_path):
+            with open(holdings_path) as f:
+                result["holdings_summary"] = f.read()[:500]
+    except Exception:
+        pass
+
+    # ─── 5. 落盘 Markdown 报告 ───
+    today = datetime.now(TZ).strftime("%Y%m%d")
+    report_dir = os.path.join(_talent_dir, "收盘")
+    os.makedirs(report_dir, exist_ok=True)
+    report_path = os.path.join(report_dir, f"{today}_1500_收盘简报.md")
+    
+    md = f"# 🌙 收盘简报 | {today}\n\n"
+    md += f"## 大盘指数\n```\n{result['indices']}\n```\n\n" if result['indices'] else "## 大盘指数\n⚠️ 获取失败\n\n"
+    
+    if result["hot_sectors"]:
+        md += "## 🔥 涨幅前5板块\n"
+        for s in result["hot_sectors"]:
+            md += f"• {s['name']}: **{s['pct']:+.2f}%**\n"
+    else:
+        md += "## 🔥 板块数据\n⚠️ akshare 收盘后限流，板块数据获取失败\n"
+    
+    if result.get("cold_sectors"):
+        md += "\n## ❄️ 跌幅前5板块\n"
+        for s in result["cold_sectors"]:
+            md += f"• {s['name']}: {s['pct']:+.2f}%\n"
+    
+    if result["dragon_summary"]:
+        md += f"\n## 🐉 龙回头尾盘\n{result['dragon_summary']}\n"
+    else:
+        md += "\n## 🐉 龙回头尾盘\n⚠️ 未找到今日尾盘扫描文件（c123a5614791 可能未执行）\n"
+    
+    md += f"\n---\n⏰ 自动生成 {now_str()}\n"
+    
+    with open(report_path, "w") as f:
+        f.write(md)
+    print(f"  💾 收盘简报 → {report_path}")
+
+    # ─── 6. JSON 数据（兼容旧格式，供云端早报消费） ───
+    data_dir = os.path.join(_repo_root, "data")
     os.makedirs(data_dir, exist_ok=True)
-    json_path = os.path.join(data_dir, f"close_report_{datetime.now(TZ).strftime('%Y%m%d')}.json")
+    json_path = os.path.join(data_dir, f"close_report_{today}.json")
     with open(json_path, "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"  💾 收盘简报 → {json_path}")
 
-    # 推送
+    # ─── 7. 飞书推送 ───
     lines = []
+    if result["indices"]:
+        lines.append("📊 大盘指数:")
+        for line in result["indices"].split("\n")[:4]:
+            if "上证" in line or "深证" in line or "创业" in line or "科创" in line:
+                lines.append(f"  {line.strip()}")
     if result["hot_sectors"]:
-        lines.append("📊 今日涨幅前十板块:")
-        for s in result["hot_sectors"][:10]:
+        lines.append("\n🔥 涨幅前5:")
+        for s in result["hot_sectors"][:5]:
             lines.append(f"  • {s['name']}: {s['pct']:+.2f}%")
-
-    body = "\n".join(lines) if lines else "📭 今日收盘数据获取不完整"
-    body += "\n\n─" * 20 + "\n"
-    body += f"⏰ 收盘简报 {now_str('%m/%d')} | 云端自动生成"
-
-    feishu_send(f"🌙 收盘简报 | {now_str('%m/%d')}", body)
-
+    else:
+        lines.append("\n⚠️ 板块数据获取失败（收盘后限流）")
+    lines.append(f"\n📄 完整报告 → 收盘/{today}_1500_收盘简报.md")
+    
+    body = "\n".join(lines)
+    feishu_send(f"🌙 收盘简报 | {today}", body)
+    
     return result
 
 
