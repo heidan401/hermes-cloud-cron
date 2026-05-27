@@ -28,6 +28,7 @@ SLOTS = {
     "09:35": "dragon_snapshot",
     "10:00": "general_reversal",
     "10:15": "dragon_execute",
+    "11:00": "general_reversal",
     "14:30": "dragon_close",
     "15:00": "close_report",
 }

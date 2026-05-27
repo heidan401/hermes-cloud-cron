@@ -7,6 +7,7 @@ on:
     - cron: "35 1 * * 1-5"   # 09:35 龙回头基准快照
     - cron: "0  2 * * 1-5"   # 10:00 通用反转扫描
     - cron: "15 2 * * 1-5"   # 10:15 龙回头执行指令
+    - cron: "0  3 * * 1-5"   # 11:00 🧪 测试时点-通用反转
   push:
     branches:
       - test-*
@@ -82,3 +83,12 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
         run: python trading_engine/engine_runner.py 10:15
+
+      - name: 🔄 11:00 通用反转
+        if: steps.slot.outputs.slot == '11:00' || steps.slot.outputs.slot == 'test_all'
+        continue-on-error: true
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+        run: python trading_engine/engine_runner.py 11:00

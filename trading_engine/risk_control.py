@@ -283,6 +283,9 @@ def _load_holdings_local() -> list:
             line = line.strip()
             if line.startswith("|") and not line.startswith("|--") and not line.startswith("| 代码"):
                 parts = [p.strip() for p in line.split("|") if p.strip()]
+                # 跳过 空仓 占位行 (code='—')
+                if len(parts) >= 1 and parts[0] in ("—", "-", "空仓"):
+                    continue
                 if len(parts) >= 4:
                     positions.append({
                         "code": parts[0],
